@@ -1,0 +1,40 @@
+;SPI-like protocol with joined MOSI and MISO
+;Data change on clock falling edge
+
+.program	ssio
+.side_set	1	opt
+
+;config:
+;autopull		off
+;autopush		on
+;out_pins		SDA
+;in_pins		SDA
+;set_pins		SDA
+;jmp_pin		SDA
+;sideset_pins	SCL
+;osr_size		24
+;isr_size		16
+
+read:
+	set	pindirs,	0		side	0
+read_loop:
+	in	pins,	1			side	1
+	jmp	y--,	read_loop	side	0
+	in	pins,	1			side	1
+	set	pindirs,	1
+.wrap_target
+	pull	block			side	1
+	out	pins,	1			side	0
+	set	x,	4				side	1
+	out	pins,	1			side	0
+	set	y,	14				side	1
+addr_loop:
+	out	pins,	1			side	0
+	jmp	x--,	addr_loop	side	1
+	out	pins,	1			side	0
+	jmp	pin,	read		side	1
+write_loop:
+	out	pins,	1			side	0
+	jmp	y--,	write_loop	side	1
+	out	pins,	1			side	0
+.wrap
