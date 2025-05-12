@@ -33,11 +33,11 @@ typedef enum {
 } CONNECTION_STATE;
 
 typedef enum {
-	RES_CODE_NEAR_DIRECT	= 0x3001,
-	RES_DATA				= 0x3011,
-	RES_CODE_FAR_DIRECT		= 0x3021,
-	RES_CODE_NEAR			= 0x3027,
-	RES_CODE_FAR			= 0x302B,
+	RES_DATA_FLASH_NEAR		= 0x3001,
+	RES_DATA_MEMORY			= 0x3011,
+	RES_DATA_FLASH_FAR		= 0x3021,
+	RES_CODE_FLASH_NEAR		= 0x3027,
+	RES_CODE_FLASH_FAR		= 0x302B,
 	RES_ICE_TYPE			= 0x3F00,
 	RES_TRG_NAME			= 0x3F01,
 	RES_FIRMWARE_VERSION	= 0x3F02,
@@ -100,12 +100,12 @@ typedef union {
 			unsigned char CoreRev					: 8;
 		};
 		unsigned char CodeFlashBlockNumNear_L		: 4;
-		unsigned char CodeFlashBlockNumFar_L			: 4;
+		unsigned char CodeFlashBlockNumFar_L		: 4;
 		union {
 			struct __attribute__((__packed__)) {
 				unsigned char CodeFlashBlockSize	: 4;
-				bool FlashProtectionEnabled			: 1;
-				bool FlashVPPDisabled				: 1;
+				bool FlashHasInternalClock			: 1;
+				bool FlashHasInternalVPP			: 1;
 				bool MemoryModel					: 1;
 				bool LockedFlashInitDisabled		: 1;
 			};
@@ -115,7 +115,7 @@ typedef union {
 			};
 		};
 		unsigned char ROMWindowEnd					: 8;
-		unsigned char CodeFlashBlockNumFar_H			: 4;
+		unsigned char CodeFlashBlockNumFar_H		: 4;
 		unsigned char CodeFlashBlockNumNear_H		: 4;
 		unsigned char CodeFlashSectorSize			: 2;
 		unsigned char MaskOptionAreaSize			: 3;
@@ -167,8 +167,8 @@ typedef struct {
 // Hardware version is defined by PIOF04, PIOF05 and PIOF06 in uEASE. Valid range is 01 to 07.
 const unsigned char hardware_version = 0x03;
 
-const char* ice_type = "uEASE";
-const char* firmware_version = "3.21";
+const char ice_type[] = "uEASE";
+const char firmware_version[] = "3.21";
 
 GLOBAL_STATE GlobalState;
 CONNECTION_STATE ConnectionState;
@@ -177,10 +177,13 @@ unsigned short PasswordInputCnt;
 unsigned short NMICEFlag;
 unsigned short NMICEControl;
 unsigned short EmulationTime;
+unsigned short MemFillRetcode;
+unsigned int MemFillEndAddr;
 bool OCDStateSyncFlag;
 bool TargetRunningFlag;
 bool TargetResetFlag;
 bool isTargetAvailable;
+bool isMemFillAvailable;
 
 unsigned short FCON_addr;
 unsigned short L2HBIT;
@@ -208,6 +211,7 @@ unsigned char const PasswordRegList[10] = {
 };
 
 unsigned short PasswordBuf[10];
+unsigned char FlashFillBuf[0x4000];
 
 unsigned char PendingPacketID;
 unsigned int RspPayloadSize;
@@ -278,7 +282,7 @@ RETCODE TargetFlashWrite(void* buffer, unsigned int startAddr, unsigned int endA
 					return RET_FLASH_TIMEOUT;
 			bufptr += 2;
 			*writeCount += 2;
-		} while ((offset += 2) < endOffset);
+		} while ((offset += 2) <= endOffset && offset);
 		break;
 	}
 	case 2:
@@ -308,7 +312,7 @@ RETCODE TargetFlashWrite(void* buffer, unsigned int startAddr, unsigned int endA
 					return RET_FLASH_TIMEOUT;
 			bufptr += 2;
 			*writeCount += 2;
-		} while ((offset += 2) < endOffset);
+		} while ((offset += 2) <= endOffset && offset);
 		break;
 	}
 	default:
@@ -344,7 +348,7 @@ RETCODE TargetFlashWrite(void* buffer, unsigned int startAddr, unsigned int endA
 			if (TargetRegisterRead(0x66) != *(unsigned short*)buffer)
 				return RET_FLASH_VERIFY_FAILURE;
 			buffer += 2;
-		} while ((offset += 2) < endOffset);
+		} while ((offset += 2) <= endOffset && offset);
 	} else {
 		while (++seg < endSeg) {
 			do {
@@ -360,7 +364,7 @@ RETCODE TargetFlashWrite(void* buffer, unsigned int startAddr, unsigned int endA
 			if (TargetRegisterRead(0x66) != BYTEARRAY_WORD_READ_LE((unsigned char*)buffer, 0))
 				return RET_FLASH_VERIFY_FAILURE;
 			buffer += 2;
-		} while ((offset += 2) < endOffset);
+		} while ((offset += 2) <= endOffset && offset);
 	}
 #endif
 	TargetRegisterWrite(0x60, 0);
@@ -464,9 +468,15 @@ RETCODE TargetFlashRead(void* buffer, unsigned int startAddr, unsigned int endAd
 			TargetRegisterWrite(0x61, 1);
 			*(unsigned short*)buffer = TargetRegisterRead(0x66);
 			buffer += 2;
-		} while ((offset += 2) < endOffset);
+		} while ((offset += 2) <= endOffset && offset);
 		break;
 	case 2:
+		if (startAddr & 1) {
+			TargetRegisterWrite(0x61, 1);
+			*(unsigned char*)buffer = TargetRegisterRead(0x66) >> 8;
+			buffer++;
+			if (!(offset += 2)) seg++;
+		}
 		while (++seg < endSeg) {
 			do {
 				TargetRegisterWrite(0x61, 1);
@@ -481,7 +491,11 @@ RETCODE TargetFlashRead(void* buffer, unsigned int startAddr, unsigned int endAd
 			unsigned short data = TargetRegisterRead(0x66);
 			BYTEARRAY_WORD_WRITE_LE((unsigned char*)buffer, 0, data);
 			buffer += 2;
-		} while ((offset += 2) < endOffset);
+		} while ((offset += 2) < endOffset && offset);
+		if (!(endOffset & 1)) {
+			TargetRegisterWrite(0x61, 1);
+			*(unsigned char*)buffer = (unsigned char)TargetRegisterRead(0x66);
+		}
 		break;
 	default:
 		return RET_INVALID_PARAM;
@@ -491,8 +505,281 @@ RETCODE TargetFlashRead(void* buffer, unsigned int startAddr, unsigned int endAd
 	return RET_SUCC;
 }
 
-RETCODE TargetFlashDirectWrite(void* buffer, unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short* writeCount) {
-	
+RETCODE TargetFlashFill(
+	unsigned int blockStartAddr,
+	unsigned int blockEndAddr,
+	unsigned int fillStartAddr,
+	unsigned int fillEndAddr,
+	int alignMode,
+	unsigned short FillWord,
+	unsigned char FillByte)
+{
+#if !FLASH_ENABLE_TEST_AREA_WRITE
+	if (blockEndAddr == targetInfo.TestAreaAddr + targetInfo.TestAreaSize - 1)
+		blockEndAddr -= targetInfo.TestAreaSize;
+#endif
+	unsigned int startAddr = blockStartAddr;
+	unsigned int endAddr = blockEndAddr;
+	int bufStartAddr = 0;
+	int bufEndAddr = 0x4000;
+	if (fillStartAddr > blockStartAddr) {
+		bufStartAddr = fillStartAddr - blockStartAddr;
+		if (bufStartAddr > 0x4000) return RET_PARAM_TOO_LARGE;
+		TargetFlashRead(FlashFillBuf, blockStartAddr, fillStartAddr - 1, alignMode);
+		startAddr = fillStartAddr;
+	}
+	if (fillEndAddr < blockEndAddr) {
+		bufEndAddr = 0x4000 + fillEndAddr - blockEndAddr;
+		if (bufEndAddr < bufStartAddr) return RET_PARAM_TOO_LARGE;
+		TargetFlashRead(FlashFillBuf + bufEndAddr, fillEndAddr + 1, blockEndAddr, alignMode);
+		endAddr = fillEndAddr;
+	}
+	if (startAddr > endAddr) return RET_SUCC;
+	RETCODE retcode = TargetFlashBlockErase(blockStartAddr);
+	if (retcode != RET_SUCC) goto abort;
+	unsigned short writeCount = 0;
+	// TODO: Turn on BUSY indicator
+	if (bufStartAddr > 0) {
+		retcode = TargetFlashWrite(FlashFillBuf, blockStartAddr, fillStartAddr - 1, alignMode, &writeCount);
+		if (retcode != RET_SUCC) goto abort;
+	}
+	if (bufEndAddr < 0x4000) {
+		retcode = TargetFlashWrite(FlashFillBuf + bufEndAddr, fillEndAddr + 1, blockEndAddr, alignMode, &writeCount);
+		if (retcode != RET_SUCC) goto abort;
+	}
+	if (alignMode == 1)
+		for (int i = 0; i < 0x2000; i++)
+			*((unsigned short*)FlashFillBuf + i) = FillWord;
+	else
+		for (int i = 0; i < 0x4000; i++)
+			FlashFillBuf[i] = FillByte;
+	for (unsigned int addr = blockStartAddr + 0x3FFF; addr < endAddr; addr += 0x4000) {
+		retcode = TargetFlashWrite(FlashFillBuf, startAddr, addr, alignMode, &writeCount);
+		if (retcode != RET_SUCC) goto abort;
+		startAddr = addr + 1;
+	}
+	retcode = TargetFlashWrite(FlashFillBuf, startAddr, endAddr, alignMode, &writeCount);
+	if (retcode != RET_SUCC) {
+		abort:
+		// TODO: Disable VPP
+		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
+		TargetRegisterWrite(0x60, 0);
+		TargetRegisterWrite(0x61, 0);
+	}
+	// TODO: Turn off BUSY indicator
+	return retcode;
+}
+
+static inline void TargetDataFlashWordWrite(unsigned short seg, unsigned short offset, unsigned short data) {
+	TargetRegisterWrite(0x60, 1);
+	TargetRegisterWrite(0x63, seg);
+	TargetRegisterWrite(0x64, offset & 0xFFFE);
+	TargetRegisterWrite(0x65, data);
+	TargetRegisterWrite(0x61, 4);
+	TargetRegisterRead(0x61);
+}
+
+static inline unsigned short TargetDataFlashWordRead(unsigned short seg, unsigned short offset) {
+	TargetRegisterWrite(0x60, 1);
+	TargetRegisterWrite(0x63, seg);
+	TargetRegisterWrite(0x64, offset & 0xFFFE);
+	TargetRegisterWrite(0x61, 1);
+	return TargetRegisterRead(0x66);
+}
+
+RETCODE TargetDataFlashWrite(void* buffer, unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short* writeCount) {
+	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short offset = startAddr & 0xFFFE;
+	unsigned short endSeg = (endAddr >> 16) & 0xFF;
+	unsigned short endOffset = endAddr & 0xFFFF;
+	unsigned int systick_csr_backup = systick_hw->csr;
+	unsigned int systick_rvr_backup = systick_hw->rvr;
+	systick_hw->csr = 0;
+	systick_hw->rvr = 0x400;
+	systick_hw->cvr = 0;
+	systick_hw->csr = 1;
+	switch (alignMode)
+	{
+	case 1:
+		while (++seg < endSeg) {
+			do {
+				unsigned short data = *(unsigned short*)buffer;
+				TargetDataFlashWordWrite(seg, offset, data);
+				systick_hw->cvr = 0;
+				while (TargetRegisterRead(0x62) & 0x0100)
+					if (systick_hw->csr >> 16)
+						return RET_FLASH_TIMEOUT;
+#if FLASH_ENABLE_WRITE_VERIFY
+				if (TargetDataFlashWordRead(seg, offset) != data)
+					return RET_FLASH_VERIFY_FAILURE;
+#endif
+				buffer += 2;
+				*writeCount += 2;
+			} while (offset += 2);
+		}
+		do {
+			unsigned short data = *(unsigned short*)buffer;
+			TargetDataFlashWordWrite(seg, offset, data);
+			systick_hw->cvr = 0;
+			while (TargetRegisterRead(0x62) & 0x0100)
+				if (systick_hw->csr >> 16)
+					return RET_FLASH_TIMEOUT;
+#if FLASH_ENABLE_WRITE_VERIFY
+			if (TargetDataFlashWordRead(seg, offset) != data)
+				return RET_FLASH_VERIFY_FAILURE;
+#endif
+			buffer += 2;
+			*writeCount += 2;
+		} while ((offset += 2) <= endOffset && offset);
+		break;
+	case 2:
+		if (startAddr & 1) {
+			unsigned short data = (unsigned char)TargetDataFlashWordRead(seg, offset) | (*(unsigned char*)buffer << 8);
+			TargetDataFlashWordWrite(seg, offset, data);
+			systick_hw->cvr = 0;
+			while (TargetRegisterRead(0x62) & 0x0100)
+				if (systick_hw->csr >> 16)
+					return RET_FLASH_TIMEOUT;
+#if FLASH_ENABLE_WRITE_VERIFY
+			if (TargetDataFlashWordRead(seg, offset) != data)
+				return RET_FLASH_VERIFY_FAILURE;
+#endif
+			buffer++;
+			if (!(offset += 2)) seg++;
+		}
+		while (++seg < endSeg) {
+			do {
+				unsigned short data = BYTEARRAY_WORD_READ_LE((unsigned char*)buffer, 0);
+				TargetDataFlashWordWrite(seg, offset, data);
+				systick_hw->cvr = 0;
+				while (TargetRegisterRead(0x62) & 0x0100)
+					if (systick_hw->csr >> 16)
+						return RET_FLASH_TIMEOUT;
+#if FLASH_ENABLE_WRITE_VERIFY
+				if (TargetDataFlashWordRead(seg, offset) != data)
+					return RET_FLASH_VERIFY_FAILURE;
+#endif
+				buffer += 2;
+				*writeCount += 2;
+			} while (offset += 2);
+		}
+		do {
+			unsigned short data = BYTEARRAY_WORD_READ_LE((unsigned char*)buffer, 0);
+			TargetDataFlashWordWrite(seg, offset, data);
+			systick_hw->cvr = 0;
+			while (TargetRegisterRead(0x62) & 0x0100)
+				if (systick_hw->csr >> 16)
+					return RET_FLASH_TIMEOUT;
+#if FLASH_ENABLE_WRITE_VERIFY
+			if (TargetDataFlashWordRead(seg, offset) != data)
+				return RET_FLASH_VERIFY_FAILURE;
+#endif
+			buffer += 2;
+			*writeCount += 2;
+		} while ((offset += 2) < endOffset && offset);
+		if (!(endOffset & 1)) {
+			unsigned short data = (TargetDataFlashWordRead(seg, offset) & 0xFF00) | *(unsigned char*)buffer;
+			TargetDataFlashWordWrite(seg, offset, data);
+			systick_hw->cvr = 0;
+			while (TargetRegisterRead(0x62) & 0x0100)
+				if (systick_hw->csr >> 16)
+					return RET_FLASH_TIMEOUT;
+#if FLASH_ENABLE_WRITE_VERIFY
+			if (TargetDataFlashWordRead(seg, offset) != data)
+				return RET_FLASH_VERIFY_FAILURE;
+#endif
+		}
+		break;
+	default:
+		return RET_INVALID_PARAM;
+	}
+	TargetRegisterWrite(0x60, 0);
+	TargetRegisterWrite(0x61, 0);
+	systick_hw->rvr = systick_rvr_backup;
+	systick_hw->cvr = 0;
+	systick_hw->csr = systick_csr_backup;
+	return RET_SUCC;
+}
+
+RETCODE TargetDataFlashFill(unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short FillWord, unsigned char FillByte) {
+	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short offset = startAddr & 0xFFFE;
+	unsigned short endSeg = (endAddr >> 16) & 0xFF;
+	unsigned short endOffset = endAddr & 0xFFFF;
+	unsigned int systick_csr_backup = systick_hw->csr;
+	unsigned int systick_rvr_backup = systick_hw->rvr;
+	systick_hw->csr = 0;
+	systick_hw->rvr = 0x400;
+	systick_hw->cvr = 0;
+	systick_hw->csr = 1;
+	unsigned short FillData = alignMode == 1 ? FillWord : (FillByte | (FillByte << 8));
+	if (startAddr & 1) {
+		TargetDataFlashWordWrite(seg, offset, (unsigned char)TargetDataFlashWordRead(seg, offset) | (FillData & 0xFF00));
+		systick_hw->cvr = 0;
+		while (TargetRegisterRead(0x62) & 0x0100)
+			if (systick_hw->csr >> 16)
+				return RET_FLASH_TIMEOUT;
+		if (!(offset += 2)) seg++;
+	}
+	while (++seg < endSeg) {
+		do {
+			TargetDataFlashWordWrite(seg, offset, FillData);
+			systick_hw->cvr = 0;
+			while (TargetRegisterRead(0x62) & 0x0100)
+				if (systick_hw->csr >> 16)
+					return RET_FLASH_TIMEOUT;
+		} while (offset += 2);
+	}
+	do {
+		TargetDataFlashWordWrite(seg, offset, FillData);
+		systick_hw->cvr = 0;
+		while (TargetRegisterRead(0x62) & 0x0100)
+			if (systick_hw->csr >> 16)
+				return RET_FLASH_TIMEOUT;
+	} while ((offset += 2) < endOffset && offset);
+	if (!(endOffset & 1)) {
+		TargetDataFlashWordWrite(seg, offset, (TargetDataFlashWordRead(seg, offset) & 0xFF00) | (unsigned char)FillData);
+		systick_hw->cvr = 0;
+		while (TargetRegisterRead(0x62) & 0x0100)
+			if (systick_hw->csr >> 16)
+				return RET_FLASH_TIMEOUT;
+	}
+#if FLASH_ENABLE_WRITE_VERIFY
+	seg = (startAddr >> 16) & 0xFF;
+	offset = startAddr & 0xFFFE;
+	TargetRegisterWrite(0x60, 3);
+	TargetRegisterWrite(0x63, seg);
+	TargetRegisterWrite(0x64, offset);
+	if (startAddr & 1) {
+		TargetRegisterWrite(0x61, 1);
+		if ((TargetRegisterRead(0x66) ^ FillData) >> 8)
+			return RET_FLASH_VERIFY_FAILURE;
+		if (!(offset += 2)) seg++;
+	}
+	while (++seg < endSeg) {
+		do {
+			TargetRegisterWrite(0x61, 1);
+			if (TargetRegisterRead(0x66) != FillData)
+				return RET_FLASH_VERIFY_FAILURE;
+		} while (offset += 2);
+	}
+	do {
+		TargetRegisterWrite(0x61, 1);
+		if (TargetRegisterRead(0x66) != FillData)
+			return RET_FLASH_VERIFY_FAILURE;
+	} while ((offset += 2) < endOffset && offset);
+	if (!(endOffset & 1)) {
+		TargetRegisterWrite(0x61, 1);
+		if ((TargetRegisterRead(0x66) ^ FillData) & 0xFF)
+			return RET_FLASH_VERIFY_FAILURE;
+	}
+#endif
+	TargetRegisterWrite(0x60, 0);
+	TargetRegisterWrite(0x61, 0);
+	systick_hw->rvr = systick_rvr_backup;
+	systick_hw->cvr = 0;
+	systick_hw->csr = systick_csr_backup;
+	return RET_SUCC;
 }
 
 static inline RETCODE TargetInstructionExec() {
@@ -502,6 +789,164 @@ static inline RETCODE TargetInstructionExec() {
 		if (time_reached(timeout))
 			return RET_TIMEOUT;
 	return RET_SUCC;
+}
+
+RETCODE TargetDataMemoryWrite(void* buffer, unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short* writeCount) {
+	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short offset;
+	unsigned int size;
+	switch (alignMode)
+	{
+	case 1:
+		offset = startAddr & 0xFFFE;
+		size = endAddr - startAddr + 2;
+		SAFE_EXEC_INSTRUCTION(0xF00C, offset);
+		do {
+			unsigned short data = *(unsigned short*)buffer;
+			if (!seg) {
+				if (offset == 0xF000) {
+					DSR_backup = data & 0xFF;
+					SAFE_EXEC_INSTRUCTION(0xF00C, offset + 1);
+					SAFE_EXEC_INSTRUCTION(data >> 8, 0x9051);
+				} else if (offset == FCON_addr) {
+					FCON_backup = data & 0xFF;
+					SAFE_EXEC_INSTRUCTION(0xF00C, offset + 1);
+					SAFE_EXEC_INSTRUCTION(data >> 8, 0x9051);
+				} else if (offset + 1 == FCON_addr) {
+					FCON_backup = data >> 8;
+					SAFE_EXEC_INSTRUCTION(data & 0xFF, 0x9051);
+					SAFE_EXEC_INSTRUCTION(0xF00C, offset + 2);
+				} else {
+					SAFE_EXEC_INSTRUCTION(data & 0xFF, 0x0100 | (data >> 8));
+					SAFE_EXEC_INSTRUCTION(0xE300, 0x9053);
+				}
+			} else {
+				SAFE_EXEC_INSTRUCTION(data & 0xFF, 0x0100 | (data >> 8));
+				SAFE_EXEC_INSTRUCTION(0xE300 | seg, 0x9053);
+			}
+			buffer += 2;
+			*writeCount += 2;
+			if (!(offset += 2)) seg++;
+		} while (size -= 2);
+		return RET_SUCC;
+	case 2:
+		offset = startAddr & 0xFFFF;
+		size = endAddr - startAddr + 1;
+		SAFE_EXEC_INSTRUCTION(0xF00C, offset);
+		do {
+			if (!seg) {
+				if (offset == 0xF000) {
+					DSR_backup = *(unsigned char*)buffer;
+					SAFE_EXEC_INSTRUCTION(0xF00C, offset + 1);
+				} else if (offset == FCON_addr) {
+					FCON_backup = *(unsigned char*)buffer;
+					SAFE_EXEC_INSTRUCTION(0xF00C, offset + 1);
+				} else {
+					SAFE_EXEC_INSTRUCTION(*(unsigned char*)buffer, 0xFE8F);
+					SAFE_EXEC_INSTRUCTION(0xE300 | seg, 0x9051);
+				}
+			} else {
+				SAFE_EXEC_INSTRUCTION(*(unsigned char*)buffer, 0xFE8F);
+				SAFE_EXEC_INSTRUCTION(0xE300 | seg, 0x9051);
+			}
+			buffer++;
+			*writeCount++;
+			if (!(++offset)) seg++;
+		} while (--size);
+		return RET_SUCC;
+	default:
+		return RET_INVALID_PARAM;
+	}
+}
+
+RETCODE TargetDataMemoryRead(void* buffer, unsigned int startAddr, unsigned int endAddr, int alignMode) {
+	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short offset;
+	unsigned int size;
+	switch (alignMode)
+	{
+	case 1:
+		offset = startAddr & 0xFFFE;
+		size = endAddr - startAddr + 2;
+		SAFE_EXEC_INSTRUCTION(0xF00C, offset);
+		TargetRegisterWrite(2, 0xE300 | seg);
+		TargetRegisterWrite(3, 0x9052);
+		do {
+			if (TargetInstructionExec()) return RET_TIMEOUT;
+			unsigned short data = TargetRegisterRead(4);
+			if (!seg) {
+				if (offset == 0xF000)
+					data = (data & 0xFF00) | DSR_backup;
+				else if (offset == FCON_addr)
+					data = (data & 0xFF00) | FCON_backup;
+				else if (offset + 1 == FCON_addr)
+					data = (data & 0xFF) | (FCON_backup << 8);
+			}
+			*(unsigned short*)buffer = data;
+			buffer += 2;
+			if (!(offset += 2)) TargetRegisterWrite(2, 0xE300 | (++seg));
+		} while (size -= 2);
+		return RET_SUCC;
+	case 2:
+		offset = startAddr & 0xFFFF;
+		size = endAddr - startAddr + 1;
+		SAFE_EXEC_INSTRUCTION(0xF00C, offset);
+		TargetRegisterWrite(2, 0xE300 | seg);
+		TargetRegisterWrite(3, 0x9050);
+		do {
+			if (TargetInstructionExec()) return RET_TIMEOUT;
+			if (!seg) {
+				if (offset == 0xF000)
+					*(unsigned char*)buffer = DSR_backup;
+				else if (offset == FCON_addr)
+					*(unsigned char*)buffer = FCON_backup;
+				else
+					*(unsigned char*)buffer = (unsigned char)TargetRegisterRead(4);
+			} else {
+				*(unsigned char*)buffer = (unsigned char)TargetRegisterRead(4);
+			}
+			buffer++;
+			if (!(++offset)) TargetRegisterWrite(2, 0xE300 | (++seg));
+		} while (--size);
+		return RET_SUCC;
+	default:
+		return RET_INVALID_PARAM;
+	}
+}
+
+RETCODE TargetDataMemoryFill(unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short FillWord, unsigned char FillByte) {
+	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short offset;
+	unsigned int size;
+	switch (alignMode)
+	{
+	case 1:
+		offset = startAddr & 0xFFFE;
+		size = endAddr - startAddr + 2;
+		SAFE_EXEC_INSTRUCTION(0xF00C, offset);
+		SAFE_EXEC_INSTRUCTION(FillWord & 0xFF, 0x0100 | (FillWord >> 8));
+		TargetRegisterWrite(2, 0xE300 | seg);
+		TargetRegisterWrite(3, 0x9053);
+		do {
+			if (TargetInstructionExec()) return RET_TIMEOUT;
+			if (!(offset += 2)) TargetRegisterWrite(2, 0xE300 | (++seg));
+		} while (size -= 2);
+		return RET_SUCC;
+	case 2:
+		offset = startAddr & 0xFFFF;
+		size = endAddr - startAddr + 1;
+		SAFE_EXEC_INSTRUCTION(0xF00C, offset);
+		SAFE_EXEC_INSTRUCTION(FillByte, 0xFE8F);
+		TargetRegisterWrite(2, 0xE300 | seg);
+		TargetRegisterWrite(3, 0x9051);
+		do {
+			if (TargetInstructionExec()) return RET_TIMEOUT;
+			if (!(++offset)) TargetRegisterWrite(2, 0xE300 | (++seg));
+		} while (--size);
+		return RET_SUCC;
+	default:
+		return RET_INVALID_PARAM;
+	}
 }
 
 RETCODE TargetBackupCPURegisters() {
@@ -584,6 +1029,379 @@ void TargetFixConnection() {
 void TargetInputPassword(int size) {
 	for (int i = size - 1; i >= 0; i--)
 		TargetRegisterWrite(PasswordRegList[i], PasswordBuf[i]);
+}
+
+RETCODE Cmd0500_MemoryWrite(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			RETCODE retcode = RET_SUCC;
+			RESOURCE_NUMBER resNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 2);
+			unsigned int startAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 4);
+			int alignMode = ReceivePacket.payload[8];
+			unsigned short size = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 9);
+			unsigned int endAddr;
+			switch (alignMode)
+			{
+			case 1:
+				startAddr &= 0xFFFE;
+				endAddr = startAddr + 2 * size - 1;
+				break;
+			case 2:
+				endAddr = startAddr + size - 1;
+				break;
+			default:
+				return RET_INVALID_PARAM;
+			}
+			unsigned short writeCount = 0;
+			switch (resNum)
+			{
+			case RES_CODE_FLASH_NEAR:
+				if (endAddr > 0xFFFF) return RET_ADDR_OUT_OF_RANGE;
+				goto code_flash_write;
+			case RES_CODE_FLASH_FAR:
+				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				code_flash_write:
+				if (startAddr < 0x100000) {
+					// TODO: Turn on BUSY indicator
+					retcode = TargetFlashWrite(ReceivePacket.payload + 11, startAddr, endAddr, alignMode, &writeCount);
+					if (retcode != RET_SUCC) {
+						// TODO: Disable VPP
+						TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
+						TargetRegisterWrite(0x60, 0);
+						TargetRegisterWrite(0x61, 0);
+					}
+					// TODO: Turn off BUSY indicator
+				} else {
+					retcode = TargetDataMemoryWrite(ReceivePacket.payload + 11, startAddr, endAddr, alignMode, &writeCount);
+				}
+				break;
+			case RES_DATA_FLASH_NEAR:
+				if (endAddr > 0xFFFF) return RET_ADDR_OUT_OF_RANGE;
+				goto data_flash_write;
+			case RES_DATA_FLASH_FAR:
+				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				data_flash_write:
+				// TODO: Turn on BUSY indicator
+				retcode = TargetDataFlashWrite(ReceivePacket.payload + 11, startAddr, endAddr, alignMode, &writeCount);
+				if (retcode != RET_SUCC) {
+					TargetRegisterWrite(0x60, 0);
+					TargetRegisterWrite(0x61, 0);
+				}
+				// TODO: Turn off BUSY indicator
+				break;
+			case RES_DATA_MEMORY:
+				if (endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				retcode = TargetDataMemoryWrite(ReceivePacket.payload + 11, startAddr, endAddr, alignMode, &writeCount);
+				break;
+			default:
+				return RET_INVALID_RES_NUMBER;
+			}
+			if (!retcode) {
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+				RspPayloadSize = 2;
+			}
+			return retcode;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0504_GetMemFillState(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, MemFillRetcode);
+			MemFillRetcode = RET_SUCC;
+			RspPayload[2] = isMemFillAvailable;
+			RspPayloadSize = 3;
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0506_SyncMemFillState(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			isMemFillAvailable = true;
+			if (MemFillRetcode != RET_SUCC) {
+				RspPayload[0] = (unsigned char)MemFillRetcode;
+				BYTEARRAY_DWORD_WRITE_BE(RspPayload, 1, MemFillEndAddr);
+			} else {
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+				BYTEARRAY_DWORD_WRITE_BE(RspPayload, 2, MemFillEndAddr);
+			}
+			RspPayloadSize = 6;
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0502_MemoryFill(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			RETCODE retcode = RET_SUCC;
+			RESOURCE_NUMBER resNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 2);
+			unsigned int startAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 4);
+			unsigned int endAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 8);
+			int alignMode = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 12);
+			unsigned short FillWord = 0;
+			unsigned char FillByte = 0;
+			if (endAddr < startAddr) return RET_ADDR_OUT_OF_RANGE;
+			switch (alignMode)
+			{
+			case 1:
+				FillWord = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 14);
+				break;
+			case 2:
+				FillByte = ReceivePacket.payload[14];
+				break;
+			default:
+				return RET_INVALID_PARAM;
+			}
+			int blockStartAddr;
+			int blockEndAddr;
+			switch (resNum)
+			{
+			case RES_CODE_FLASH_NEAR:
+				if (endAddr > 0xFFFF) return RET_ADDR_OUT_OF_RANGE;
+				goto code_flash_fill;
+			case RES_CODE_FLASH_FAR:
+				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				code_flash_fill:
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+				RspPayloadSize = 2;
+				MemFillRetcode = RET_SUCC;
+				isMemFillAvailable = false;
+				if (!targetInfo.CodeBlocks[0].BlockEndAddr) return RET_TARGET_INFO_ERROR;
+				int firstBlockIdx = 0;
+				while (targetInfo.CodeBlocks[firstBlockIdx].BlockStartAddr > startAddr || targetInfo.CodeBlocks[firstBlockIdx].BlockEndAddr < startAddr) {
+					firstBlockIdx++;
+					if (firstBlockIdx >= 0x100 || !targetInfo.CodeBlocks[firstBlockIdx].BlockEndAddr)
+						return RET_ADDR_OUT_OF_RANGE;
+				}
+				int lastBlockIdx = 0;
+				while (targetInfo.CodeBlocks[lastBlockIdx].BlockStartAddr > endAddr || targetInfo.CodeBlocks[lastBlockIdx].BlockEndAddr < endAddr) {
+					lastBlockIdx++;
+					if (lastBlockIdx >= 0x100 || !targetInfo.CodeBlocks[lastBlockIdx].BlockEndAddr)
+						return RET_ADDR_OUT_OF_RANGE;
+				}
+				int blockIdx = firstBlockIdx;
+				blockStartAddr = targetInfo.CodeBlocks[blockIdx].BlockStartAddr;
+				do {
+					blockEndAddr = targetInfo.CodeBlocks[blockIdx].BlockEndAddr;
+					retcode = TargetFlashFill(blockStartAddr, blockEndAddr, startAddr, endAddr, alignMode, FillWord, FillByte);
+					if (retcode != RET_SUCC) {
+						isMemFillAvailable = true;
+						MemFillRetcode = retcode;
+						return RET_SUCC;
+					}
+					if (++blockIdx >= 0x100) return RET_TARGET_INFO_ERROR;
+					blockStartAddr = targetInfo.CodeBlocks[blockIdx].BlockStartAddr;
+					if (!blockStartAddr) blockStartAddr = blockEndAddr + 1;
+				} while (blockEndAddr < targetInfo.CodeBlocks[lastBlockIdx].BlockEndAddr);
+				isMemFillAvailable = true;
+				MemFillEndAddr = blockEndAddr;
+				return RET_SUCC;
+			case RES_DATA_FLASH_NEAR:
+				if (endAddr > 0xFFFF) return RET_ADDR_OUT_OF_RANGE;
+				goto data_flash_fill;
+			case RES_DATA_FLASH_FAR:
+				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				data_flash_fill:
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+				RspPayloadSize = 2;
+				MemFillRetcode = RET_SUCC;
+				blockStartAddr = startAddr;
+				do {
+					blockEndAddr = endAddr > blockStartAddr + 0xFF ? blockStartAddr + 0xFF : endAddr;
+					// TODO: Turn on BUSY indicator
+					retcode = TargetDataFlashFill(blockStartAddr, blockEndAddr, alignMode, FillWord, FillByte);
+					if (retcode != RET_SUCC) {
+						TargetRegisterWrite(0x60, 0);
+						TargetRegisterWrite(0x61, 0);
+						// TODO: Turn off BUSY indicator
+						MemFillEndAddr = alignMode == 1 ? -2 : -1;
+						MemFillRetcode = retcode;
+						return RET_SUCC;
+					}
+					// TODO: Turn off BUSY indicator
+					blockStartAddr = blockEndAddr + 1;
+				} while (blockEndAddr < endAddr);
+				MemFillEndAddr = blockEndAddr;
+				return RET_SUCC;
+			case RES_DATA_MEMORY:
+				if (endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+				RspPayloadSize = 2;
+				MemFillRetcode = RET_SUCC;
+				blockStartAddr = startAddr;
+				do {
+					blockEndAddr = endAddr > blockStartAddr + 0xFF ? blockStartAddr + 0xFF : endAddr;
+					retcode = TargetDataMemoryFill(blockStartAddr, blockEndAddr, alignMode, FillWord, FillByte);
+					if (retcode != RET_SUCC) {
+						MemFillEndAddr = alignMode == 1 ? -2 : -1;
+						MemFillRetcode = retcode;
+						return RET_SUCC;
+					}
+					blockStartAddr = blockEndAddr + 1;
+				} while (blockEndAddr < endAddr);
+				MemFillEndAddr = blockEndAddr;
+				return RET_SUCC;
+			default:
+				return RET_INVALID_RES_NUMBER;
+			}
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0510_MemoryRead(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			if (!(TargetInfoState & 1)) return RET_TARGET_INFO_ERROR;
+			RETCODE retcode = RET_SUCC;
+			RESOURCE_NUMBER resNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 2);
+			unsigned int startAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 4);
+			unsigned short size = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 8);
+			int alignMode = ReceivePacket.payload[10];
+			if (alignMode == 1) {
+				startAddr &= 0xFFFE;
+				size <<= 1;
+			} else if (alignMode != 2) {
+				return RET_INVALID_PARAM;
+			}
+			unsigned int endAddr = startAddr + size - 1;
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 2, size);
+			RspPayloadSize = 4 + size;
+			switch (resNum)
+			{
+			case RES_CODE_FLASH_NEAR:
+				if (endAddr > 0xFFFF) return RET_ADDR_OUT_OF_RANGE;
+				goto code_flash_read;
+			case RES_CODE_FLASH_FAR:
+				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				code_flash_read:
+				if (startAddr < 0x100000) {
+					retcode = TargetFlashRead(RspPayload + 4, startAddr, endAddr, alignMode);
+					if (retcode != RET_SUCC) {
+						TargetRegisterWrite(0x60, 0);
+						TargetRegisterWrite(0x61, 0);
+						return retcode;
+					}
+					return RET_SUCC;
+				}
+				return TargetDataMemoryRead(RspPayload + 4, startAddr, endAddr, alignMode);
+			case RES_DATA_FLASH_NEAR:
+				if (endAddr > 0xFFFF) return RET_ADDR_OUT_OF_RANGE;
+				goto data_flash_read;
+			case RES_DATA_FLASH_FAR:
+				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				data_flash_read:
+				retcode = TargetFlashRead(RspPayload + 4, startAddr, endAddr, alignMode);
+				if (retcode != RET_SUCC) {
+					TargetRegisterWrite(0x60, 0);
+					TargetRegisterWrite(0x61, 0);
+					return retcode;
+				}
+				return RET_SUCC;
+			case RES_DATA_MEMORY:
+				if (endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				if (!targetInfo.ROMReadEnabled || startAddr > targetInfo.ROMWindowEnd || endAddr < targetInfo.ROMWindowStart)
+					return TargetDataMemoryRead(RspPayload + 4, startAddr, endAddr, alignMode);
+				if (startAddr >= targetInfo.ROMWindowStart) {
+					if (endAddr <= targetInfo.ROMWindowEnd) {
+						retcode = TargetFlashRead(RspPayload + 4, startAddr, endAddr, alignMode);
+						if (retcode != RET_SUCC) {
+							TargetRegisterWrite(0x60, 0);
+							TargetRegisterWrite(0x61, 0);
+							return retcode;
+						}
+						return RET_SUCC;
+					} else {
+						retcode = TargetFlashRead(RspPayload + 4, startAddr, targetInfo.ROMWindowEnd, alignMode);
+						if (retcode != RET_SUCC) {
+							TargetRegisterWrite(0x60, 0);
+							TargetRegisterWrite(0x61, 0);
+							return retcode;
+						}
+						return TargetDataMemoryRead(RspPayload + 4 + (targetInfo.ROMWindowEnd - startAddr + 1), targetInfo.ROMWindowEnd + 1, endAddr, alignMode);
+					}
+				} else {
+					if (endAddr <= targetInfo.ROMWindowEnd) {
+						retcode = TargetDataMemoryRead(RspPayload + 4, startAddr, targetInfo.ROMWindowStart - 1, alignMode);
+						if (retcode != RET_SUCC) return retcode;
+						retcode = TargetFlashRead(RspPayload + 4 + (targetInfo.ROMWindowStart - startAddr), targetInfo.ROMWindowStart, endAddr, alignMode);
+						if (retcode != RET_SUCC) {
+							TargetRegisterWrite(0x60, 0);
+							TargetRegisterWrite(0x61, 0);
+							return retcode;
+						}
+						return RET_SUCC;
+					} else {
+						retcode = TargetDataMemoryRead(RspPayload + 4, startAddr, targetInfo.ROMWindowStart - 1, alignMode);
+						if (retcode != RET_SUCC) return retcode;
+						retcode = TargetFlashRead(RspPayload + 4 + (targetInfo.ROMWindowStart - startAddr), targetInfo.ROMWindowStart, targetInfo.ROMWindowEnd, alignMode);
+						if (retcode != RET_SUCC) {
+							TargetRegisterWrite(0x60, 0);
+							TargetRegisterWrite(0x61, 0);
+							return retcode;
+						}
+						return TargetDataMemoryRead(RspPayload + 4 + (targetInfo.ROMWindowEnd - startAddr + 1), targetInfo.ROMWindowEnd + 1, endAddr, alignMode);
+					}
+				}
+			default:
+				return RET_INVALID_RES_NUMBER;
+			}
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
 }
 
 RETCODE Cmd0700_ResetAndBreak(void) {
@@ -1178,6 +1996,11 @@ RETCODE CmdFFFF_InvalidCommand(void) {
 }
 
 uEASECommand const CmdList[] = {
+	{0x0500, Cmd0500_MemoryWrite},
+	{0x0502, Cmd0502_MemoryFill},
+	{0x0504, Cmd0504_GetMemFillState},
+	{0x0506, Cmd0506_SyncMemFillState},
+	{0x0510, Cmd0510_MemoryRead},
 	{0x0700, Cmd0700_ResetAndBreak},
 	{0x1210, Cmd1210_InitializeFlash},
 	{0x1212, Cmd1212_FlashBlockErase},
@@ -1249,10 +2072,13 @@ int main()
 	OCD_ID = 0;
 	PasswordInputCnt = 0;
 	EmulationTime = 0;
+	MemFillRetcode = RET_SUCC;
+	MemFillEndAddr = 0;
 	OCDStateSyncFlag = false;
 	TargetRunningFlag = false;
 	TargetResetFlag = false;
 	isTargetAvailable = true;
+	isMemFillAvailable = true;
 	TargetInfoState = 0;
 
 	while (true) {
