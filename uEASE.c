@@ -1,12 +1,12 @@
 #include "hardware.h"
 #include "usb.h"
 
-#define BYTEARRAY_WORD_READ_LE(x,y)			(x)[(y)] | ((x)[(y) + 1] << 8)
-#define BYTEARRAY_WORD_READ_BE(x,y)			((x)[(y)] << 8) | (x)[(y) + 1]
+#define BYTEARRAY_WORD_READ_LE(x,y)			((x)[(y)] | ((x)[(y) + 1] << 8))
+#define BYTEARRAY_WORD_READ_BE(x,y)			(((x)[(y)] << 8) | (x)[(y) + 1])
 #define BYTEARRAY_WORD_WRITE_LE(x,y,z)		(x)[(y)] = (unsigned char)(z);(x)[(y) + 1] = (unsigned char)((z) >> 8)
 #define BYTEARRAY_WORD_WRITE_BE(x,y,z)		(x)[(y)] = (unsigned char)((z) >> 8);(x)[(y) + 1] = (unsigned char)(z)
-#define BYTEARRAY_DWORD_READ_LE(x,y)		(x)[(y)] | ((x)[(y) + 1] << 8) | ((x)[(y) + 2] << 16) | ((x)[(y) + 3] << 24)
-#define BYTEARRAY_DWORD_READ_BE(x,y)		((x)[(y)] << 24) | ((x)[(y) + 1] << 16) | ((x)[(y) + 2] << 8) | (x)[(y) + 3]
+#define BYTEARRAY_DWORD_READ_LE(x,y)		((x)[(y)] | ((x)[(y) + 1] << 8) | ((x)[(y) + 2] << 16) | ((x)[(y) + 3] << 24))
+#define BYTEARRAY_DWORD_READ_BE(x,y)		(((x)[(y)] << 24) | ((x)[(y) + 1] << 16) | ((x)[(y) + 2] << 8) | (x)[(y) + 3])
 #define BYTEARRAY_DWORD_WRITE_LE(x,y,z)		(x)[(y)] = (unsigned char)(z);(x)[(y) + 1] = (unsigned char)((z) >> 8);(x)[(y) + 2] = (unsigned char)((z) >> 16);(x)[(y) + 3] = (unsigned char)((z) >> 24)
 #define BYTEARRAY_DWORD_WRITE_BE(x,y,z)		(x)[(y)] = (unsigned char)((z) >> 24);(x)[(y) + 1] = (unsigned char)((z) >> 16);(x)[(y) + 2] = (unsigned char)((z) >> 8);(x)[(y) + 3] = (unsigned char)(z)
 
