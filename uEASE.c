@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "hardware.h"
 #include "usb.h"
 
@@ -38,6 +39,82 @@ typedef enum {
 	RES_DATA_FLASH_FAR		= 0x3021,
 	RES_CODE_FLASH_NEAR		= 0x3027,
 	RES_CODE_FLASH_FAR		= 0x302B,
+	RES_R0					= 0x3100,
+	RES_R1					= 0x3101,
+	RES_R2					= 0x3102,
+	RES_R3					= 0x3103,
+	RES_R4					= 0x3104,
+	RES_R5					= 0x3105,
+	RES_R6					= 0x3106,
+	RES_R7					= 0x3107,
+	RES_R8					= 0x3108,
+	RES_R9					= 0x3109,
+	RES_R10					= 0x310A,
+	RES_R11					= 0x310B,
+	RES_R12					= 0x310C,
+	RES_R13					= 0x310D,
+	RES_R14					= 0x310E,
+	RES_R15					= 0x310F,
+	RES_LR					= 0x3500,
+	RES_ELR1				= 0x3501,
+	RES_ELR2				= 0x3502,
+	RES_ELR3				= 0x3503,
+	RES_CSR					= 0x3505,
+	RES_LCSR				= 0x3506,
+	RES_ECSR1				= 0x3507,
+	RES_ECSR2				= 0x3508,
+	RES_ECSR3				= 0x3509,
+	RES_DSR					= 0x350B,
+	RES_SP					= 0x350D,
+	RES_EA					= 0x350E,
+	RES_PSW					= 0x3600,
+	RES_EPSW1				= 0x3602,
+	RES_EPSW2				= 0x3603,
+	RES_EPSW3				= 0x3604,
+	RES_PSW_C				= 0x3606,
+	RES_PSW_Z				= 0x3607,
+	RES_PSW_S				= 0x3608,
+	RES_PSW_OV				= 0x3609,
+	RES_PSW_MIE				= 0x360A,
+	RES_PSW_HC				= 0x360B,
+	RES_PSW_ELEVEL			= 0x360C,
+	RES_EPSW1_C				= 0x360D,
+	RES_EPSW1_Z				= 0x360E,
+	RES_EPSW1_S				= 0x360F,
+	RES_EPSW1_OV			= 0x3610,
+	RES_EPSW1_MIE			= 0x3611,
+	RES_EPSW1_HC			= 0x3612,
+	RES_EPSW1_ELEVEL		= 0x3613,
+	RES_EPSW2_C				= 0x3614,
+	RES_EPSW2_Z				= 0x3615,
+	RES_EPSW2_S				= 0x3616,
+	RES_EPSW2_OV			= 0x3617,
+	RES_EPSW2_MIE			= 0x3618,
+	RES_EPSW2_HC			= 0x3619,
+	RES_EPSW2_ELEVEL		= 0x361A,
+	RES_EPSW3_C				= 0x361B,
+	RES_EPSW3_Z				= 0x361C,
+	RES_EPSW3_S				= 0x361D,
+	RES_EPSW3_OV			= 0x361E,
+	RES_EPSW3_MIE			= 0x361F,
+	RES_EPSW3_HC			= 0x3620,
+	RES_EPSW3_ELEVEL		= 0x3621,
+	RES_CR0					= 0x3700,
+	RES_CR1					= 0x3701,
+	RES_CR2					= 0x3702,
+	RES_CR3					= 0x3703,
+	RES_CR4					= 0x3704,
+	RES_CR5					= 0x3705,
+	RES_CR6					= 0x3706,
+	RES_CR7					= 0x3707,
+	RES_CR8					= 0x3708,
+	RES_CR9					= 0x3709,
+	RES_CR10				= 0x370A,
+	RES_CR11				= 0x370B,
+	RES_CR12				= 0x370C,
+	RES_CR13				= 0x370D,
+	RES_CR14				= 0x370E,
+	RES_CR15				= 0x370F,
 	RES_ICE_TYPE			= 0x3F00,
 	RES_TRG_NAME			= 0x3F01,
 	RES_FIRMWARE_VERSION	= 0x3F02,
@@ -70,6 +147,11 @@ typedef enum {
 	RET_ISP_VERIFY_FAILURE		= 0x630D,
 	RET_INVALID_COMMAND			= 0x6FFF,
 } RETCODE;
+
+typedef enum {
+	DATA_MODEL_NEAR			= 0,
+	DATA_MODEL_FAR			= 1,
+} DATA_MODEL;
 
 typedef struct {
 	unsigned short CmdId;
@@ -188,6 +270,9 @@ bool isMemFillAvailable;
 unsigned short FCON_addr;
 unsigned short L2HBIT;
 unsigned short H2LBIT;
+
+DATA_MODEL DataModel;
+unsigned int DSR_addr;
 
 unsigned short ER0_backup;
 unsigned short EA_backup;
@@ -792,7 +877,7 @@ static inline RETCODE TargetInstructionExec() {
 }
 
 RETCODE TargetDataMemoryWrite(void* buffer, unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short* writeCount) {
-	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short seg = DataModel == DATA_MODEL_NEAR ? 0 : (startAddr >> 16) & 0xFF;
 	unsigned short offset;
 	unsigned int size;
 	switch (alignMode)
@@ -860,7 +945,7 @@ RETCODE TargetDataMemoryWrite(void* buffer, unsigned int startAddr, unsigned int
 }
 
 RETCODE TargetDataMemoryRead(void* buffer, unsigned int startAddr, unsigned int endAddr, int alignMode) {
-	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short seg = DataModel == DATA_MODEL_NEAR ? 0 : (startAddr >> 16) & 0xFF;
 	unsigned short offset;
 	unsigned int size;
 	switch (alignMode)
@@ -915,7 +1000,7 @@ RETCODE TargetDataMemoryRead(void* buffer, unsigned int startAddr, unsigned int 
 }
 
 RETCODE TargetDataMemoryFill(unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short FillWord, unsigned char FillByte) {
-	unsigned short seg = (startAddr >> 16) & 0xFF;
+	unsigned short seg = DataModel == DATA_MODEL_NEAR ? 0 : (startAddr >> 16) & 0xFF;
 	unsigned short offset;
 	unsigned int size;
 	switch (alignMode)
@@ -954,9 +1039,11 @@ RETCODE TargetBackupCPURegisters() {
 	EA_backup = TargetRegisterRead(5);
 	SAFE_EXEC_INSTRUCTION(0xA004, 0xFE8F);
 	PSW_backup = TargetRegisterRead(4);
-	SAFE_EXEC_INSTRUCTION(0xF00C, 0xF000);
-	SAFE_EXEC_INSTRUCTION(0xFE8F, 0x9030);
-	DSR_backup = TargetRegisterRead(4);
+	if (DataModel == DATA_MODEL_FAR) {
+		SAFE_EXEC_INSTRUCTION(0xF00C, 0xF000);
+		SAFE_EXEC_INSTRUCTION(0xFE8F, 0x9030);
+		DSR_backup = TargetRegisterRead(4);
+	}
 	SAFE_EXEC_INSTRUCTION(0xF00C, FCON_addr);
 	SAFE_EXEC_INSTRUCTION(0xE300, 0x9030);
 	FCON_backup = TargetRegisterRead(4);
@@ -964,6 +1051,13 @@ RETCODE TargetBackupCPURegisters() {
 	SAFE_EXEC_INSTRUCTION(0xE300, 0x9031);
 	SAFE_EXEC_INSTRUCTION(0xE300, 0x9031);
 	busy_wait_us(200);
+	return RET_SUCC;
+}
+
+RETCODE TargetSetELR(unsigned int elr) {
+	SAFE_EXEC_INSTRUCTION(elr & 0xFF, 0x0100 | ((elr >> 8) & 0xFF));
+	SAFE_EXEC_INSTRUCTION(0xA00D, 0xFE8F);
+	SAFE_EXEC_INSTRUCTION((elr >> 16) & 0xFF, 0xA00F);
 	return RET_SUCC;
 }
 
@@ -1404,6 +1498,237 @@ RETCODE Cmd0510_MemoryRead(void) {
 	}
 }
 
+RETCODE Cmd0530_SetPC(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			unsigned int pc = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 2);
+			if (pc > 0xFFFFF) return RET_ADDR_OUT_OF_RANGE;
+			if (TargetSetELR(pc) != RET_SUCC) return RET_TIMEOUT;
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+			RspPayloadSize = 2;
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0532_GetPC(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			unsigned int pc = ((TargetRegisterRead(0xB) & 0xF000) << 4) | TargetRegisterRead(0xA);
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+			BYTEARRAY_DWORD_WRITE_BE(RspPayload, 2, pc);
+			RspPayloadSize = 6;
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0540_SetCPURegister(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) break;
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+	unsigned short requestNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 2);
+	if (!requestNum || requestNum > 50) return RET_PARAM_TOO_LARGE;
+	for (unsigned short i = 0; i < requestNum; i++) {
+		RESOURCE_NUMBER resNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, i * 6 + 4);
+		unsigned int value = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, i * 6 + 6);
+		if (resNum == RES_R0) {
+			ER0_backup = (ER0_backup & 0xFF00) | (value & 0xFF);
+		} else if (resNum == RES_R1) {
+			ER0_backup = (ER0_backup & 0xFF) | (value << 8);
+		} else if (resNum >= RES_R2 && resNum <= RES_R15) {
+			SAFE_EXEC_INSTRUCTION((resNum << 8) | (value & 0xFF), 0xFE8F);
+		} else if (resNum >= RES_LR && resNum <= RES_ELR3) {
+			SAFE_EXEC_INSTRUCTION(resNum - RES_LR, 0xA00B);
+			SAFE_EXEC_INSTRUCTION(value & 0xFF, 0x0100 | (value >> 8));
+			SAFE_EXEC_INSTRUCTION(0xA00D, 0xFE8F);
+			SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+		} else if (resNum >= RES_CSR && resNum <= RES_ECSR3) {
+			SAFE_EXEC_INSTRUCTION((resNum - RES_LCSR) & 3, 0xA00B);
+			SAFE_EXEC_INSTRUCTION(value & 0xF, 0xA00F);
+			SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+		} else if (resNum == RES_DSR) {
+			DSR_backup = value;
+		} else if (resNum == RES_EA) {
+			EA_backup = value;
+		} else if (resNum == RES_SP) {
+			SAFE_EXEC_INSTRUCTION(value & 0xFF, 0x0100 | (value >> 8));
+			SAFE_EXEC_INSTRUCTION(0xA10A, 0xFE8F);
+		} else if (resNum == RES_PSW) {
+			PSW_backup = value;
+		} else if (resNum >= RES_EPSW1 && resNum <= RES_EPSW3) {
+			SAFE_EXEC_INSTRUCTION(resNum - RES_EPSW1 + 1, 0xA00B);
+			SAFE_EXEC_INSTRUCTION(value & 0xFF, 0xA00C);
+			SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+		} else if (resNum >= RES_PSW_C && resNum <= RES_PSW_HC) {
+			unsigned char bitmask = 0x80 >> (resNum - RES_PSW_C);
+			if (value & 1) {
+				PSW_backup |= bitmask;
+			} else {
+				PSW_backup &= ~bitmask;
+			}
+		} else if (resNum == RES_PSW_ELEVEL) {
+			PSW_backup = (PSW_backup & 0xFC) | (value & 3);
+		} else if (resNum >= RES_EPSW1_C && resNum <= RES_EPSW3_ELEVEL) {
+			int idx;
+			if (resNum <= RES_EPSW1_ELEVEL) {
+				SAFE_EXEC_INSTRUCTION(0x0001, 0xA00B);
+				idx = resNum - RES_EPSW1_C;
+			} else if (resNum <= RES_EPSW2_ELEVEL) {
+				SAFE_EXEC_INSTRUCTION(0x0002, 0xA00B);
+				idx = resNum - RES_EPSW2_C;
+			} else {
+				SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+				idx = resNum - RES_EPSW3_C;
+			}
+			SAFE_EXEC_INSTRUCTION(0xA004, 0xFE8F);
+			unsigned char epsw = TargetRegisterRead(4);
+			if (idx == 6) {
+				epsw = (epsw & 0xFC) | (value & 3);
+			} else {
+				unsigned char bitmask = 0x80 >> idx;
+				if (value & 1) {
+					epsw |= bitmask;
+				} else {
+					epsw &= ~bitmask;
+				}
+			}
+			SAFE_EXEC_INSTRUCTION(epsw, 0xA00C);
+			SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+		} else if (resNum >= RES_CR0 && resNum <= RES_CR15) {
+			SAFE_EXEC_INSTRUCTION(value & 0xFF, 0xA00E | (resNum << 8));
+		} else {
+			return RET_INVALID_RES_NUMBER;
+		}
+	}
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+	RspPayloadSize = 2;
+	return RET_SUCC;
+}
+
+RETCODE Cmd0542_GetCPURegister(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) break;
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+	unsigned int requestNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 2);
+	if (!requestNum || requestNum > 50) return RET_PARAM_TOO_LARGE;
+	for (unsigned short i = 0; i < requestNum; i++) {
+		RESOURCE_NUMBER resNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, i * 2 + 4);
+		unsigned int value;
+		if (resNum == RES_R0) {
+			value = ER0_backup & 0xFF;
+		} else if (resNum == RES_R1) {
+			value = ER0_backup >> 8;
+		} else if (resNum >= RES_R2 && resNum <= RES_R15) {
+			SAFE_EXEC_INSTRUCTION(0x8000 | (resNum & 0xF) << 4, 0xFE8F);
+			value = TargetRegisterRead(4) & 0xFF;
+		} else if (resNum >= RES_LR && resNum <= RES_ELR3) {
+			value = TargetRegisterRead(7 + resNum - RES_LR);
+		} else if (resNum >= RES_CSR && resNum <= RES_ECSR3) {
+			value = (TargetRegisterRead(0xB) >> (((resNum - RES_LCSR) & 3) << 2)) & 0xF;
+		} else if (resNum == RES_DSR) {
+			value = DSR_backup;
+		} else if (resNum == RES_EA) {
+			value = EA_backup;
+		} else if (resNum == RES_SP) {
+			SAFE_EXEC_INSTRUCTION(0xA01A, 0xFE8F);
+			value = TargetRegisterRead(4);
+		} else if (resNum == RES_PSW) {
+			value = PSW_backup;
+		} else if (resNum >= RES_EPSW1 && resNum <= RES_EPSW3) {
+			SAFE_EXEC_INSTRUCTION(resNum - RES_EPSW1 + 1, 0xA00B);
+			SAFE_EXEC_INSTRUCTION(0xA004, 0xFE8F);
+			value = TargetRegisterRead(4) & 0xFF;
+			SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+		} else if (resNum >= RES_PSW_C && resNum <= RES_PSW_HC) {
+			unsigned char bitmask = 0x80 >> (resNum - RES_PSW_C);
+			if (PSW_backup & bitmask) {
+				value = 1;
+			} else {
+				value = 0;
+			}
+		} else if (resNum == RES_PSW_ELEVEL) {
+			value = PSW_backup & 3;
+		} else if (resNum >= RES_EPSW1_C && resNum <= RES_EPSW3_ELEVEL) {
+			int idx;
+			if (resNum <= RES_EPSW1_ELEVEL) {
+				SAFE_EXEC_INSTRUCTION(0x0001, 0xA00B);
+				idx = resNum - RES_EPSW1_C;
+			} else if (resNum <= RES_EPSW2_ELEVEL) {
+				SAFE_EXEC_INSTRUCTION(0x0002, 0xA00B);
+				idx = resNum - RES_EPSW2_C;
+			} else {
+				SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+				idx = resNum - RES_EPSW3_C;
+			}
+			SAFE_EXEC_INSTRUCTION(0xA004, 0xFE8F);
+			unsigned char epsw = TargetRegisterRead(4);
+			if (idx == 6) {
+				value = epsw & 3;
+			} else {
+				unsigned char bitmask = 0x80 >> idx;
+				if (epsw & bitmask) {
+					value = 1;
+				} else {
+					value = 0;
+				}
+			}
+			SAFE_EXEC_INSTRUCTION(0x0003, 0xA00B);
+		} else if (resNum >= RES_CR0 && resNum <= RES_CR15) {
+			SAFE_EXEC_INSTRUCTION(0xA006 | ((resNum & 0xF) << 4), 0xFE8F);
+			value = TargetRegisterRead(4) & 0xFF;
+		} else {
+			return RET_INVALID_RES_NUMBER;
+		}
+		BYTEARRAY_WORD_WRITE_BE(RspPayload, i * 6 + 4, resNum);
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, i * 6 + 6, value);
+	}
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 2, requestNum);
+	RspPayloadSize = requestNum * 6 + 4;
+	return RET_SUCC;
+}
+
 RETCODE Cmd0700_ResetAndBreak(void) {
 	switch (GlobalState)
 	{
@@ -1656,6 +1981,126 @@ RETCODE Cmd0A00_GetInfo(void) {
 	return RET_SUCC;
 }
 
+RETCODE Cmd0A01_SetDataModel(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+	case STATE_BUSY:
+		DataModel = ReceivePacket.payload[2];
+		DSR_addr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 3);
+		if (DSR_addr >= 0x10000) return RET_ADDR_OUT_OF_RANGE;
+		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+		RspPayloadSize = 2;
+		return RET_SUCC;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0A03_ParseOldTargetID(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+	case STATE_BUSY:
+		break;
+	default:
+		return RET_ERROR;
+	}
+	targetID.Word0 = TargetRegisterRead(0x40);
+	targetID.Word1 = TargetRegisterRead(0x41);
+	targetID.Word2 = TargetRegisterRead(0x42);
+	targetID.Word3 = TargetRegisterRead(0x43);
+	for (int i = 0; i < 3; i++) {
+		if (targetID.Word0 == TargetIDToFix[i].Word0
+		&& targetID.Word1 == TargetIDToFix[i].Word1
+		&& targetID.Word2 == TargetIDToFix[i].Word2
+		&& targetID.Word3 == TargetIDToFix[i].Word3) {
+			targetID.Word3 = 0x3F18;
+			break;
+		}
+	}
+	int ModelNamePtr = 0;
+	switch ((targetID.Word1 >> 8) & 0x7F)
+	{
+	case 0:
+		strcpy(targetInfo.TargetNameStr, "610");
+		ModelNamePtr = 3;
+		break;
+	case 1:
+		strcpy(targetInfo.TargetNameStr, "22");
+		ModelNamePtr = 2;
+		break;
+	case 2:
+		strcpy(targetInfo.TargetNameStr, "7");
+		ModelNamePtr = 1;
+		break;
+	case 3:
+		strcpy(targetInfo.TargetNameStr, "8");
+		ModelNamePtr = 1;
+		break;
+	case 4:
+		strcpy(targetInfo.TargetNameStr, "6");
+		ModelNamePtr = 1;
+		break;
+	case 5:
+		strcpy(targetInfo.TargetNameStr, "615");
+		ModelNamePtr = 3;
+		break;
+	default:
+		return RET_UNSUPPORTED_TARGET;
+	}
+	if (targetID.Word0 & 0xF)
+		itoa(targetID.Word0, targetInfo.TargetNameStr + ModelNamePtr, 16);
+	else
+		itoa(targetID.Word0 >> 4, targetInfo.TargetNameStr + ModelNamePtr, 16);
+	targetInfo.ROMWindowEnd = (targetID.ROMWindowEnd << 8) | 0xFF;
+	targetInfo.LockedFlashInitDisabled = targetID.LockedFlashInitDisabled;
+	targetInfo.MemoryModel = targetID.MemoryModel;
+	targetInfo.FlashCharacteristics = targetID.FlashCharacteristics;
+	targetInfo.CodeFlashBlockSize = targetID.CodeFlashBlockSize << 11;
+	targetInfo.CodeFlashBlockNumNear = targetID.CodeFlashBlockNumNear_L;
+	targetInfo.CodeFlashBlockNumFar = targetID.CodeFlashBlockNumFar_L;
+	targetInfo.CoreRev = targetID.CoreRev;
+	targetInfo.ROMReadEnabled = targetID.ROMReadEnabled;
+	targetInfo.MaskOptionAreaSize = 0x200;
+	targetInfo.TestAreaSize = 0x200;
+	targetInfo.TestAreaAddr = targetInfo.CodeFlashBlockSize * targetInfo.CodeFlashBlockNumNear - targetInfo.TestAreaSize;
+	targetInfo.MaskOptionAreaAddr = targetInfo.TestAreaAddr - targetInfo.MaskOptionAreaSize;
+	targetInfo.FlashPwdAddr = targetInfo.TestAreaAddr - 0x10;
+	for (int i = 0; i < targetInfo.CodeFlashBlockNumFar; i++) {
+		targetInfo.CodeBlocks[i].BlockStartAddr = targetInfo.CodeFlashBlockSize * i;
+		targetInfo.CodeBlocks[i].BlockEndAddr = targetInfo.CodeFlashBlockSize * (i + 1) - 1;
+	}
+	for (int i = targetInfo.CodeFlashBlockNumFar; i < 0x100; i++) {
+		targetInfo.CodeBlocks[i].BlockStartAddr = 0;
+		targetInfo.CodeBlocks[i].BlockEndAddr = 0;
+	}
+	if (((targetID.Word1 >> 8) & 0x7F) == 2)
+		targetInfo.CodeFlashBlockNumFar |= TargetRegisterRead(0x50) << 4;
+	if (!((targetID.Word1 >> 8) & 0x7F) && targetID.Word0 == 0xF)
+		FCON_addr = 0xF00A;
+	else
+		FCON_addr = 0xF003;
+	L2HBIT = 3;
+	H2LBIT = 3;
+	TargetInfoState |= 1;
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 2, targetID.Word3);
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 4, targetID.Word2);
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 6, targetID.Word1);
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 8, targetID.Word0);
+	RspPayloadSize = 10;
+	return RET_SUCC;
+}
+
 RETCODE Cmd0A04_SetTargetInfo(void) {
 	switch (GlobalState)
 	{
@@ -1678,7 +2123,7 @@ RETCODE Cmd0A04_SetTargetInfo(void) {
 	}
 }
 
-RETCODE Cmd0A05_ParseTargetID(void) {
+RETCODE Cmd0A05_ParseNewTargetID(void) {
 	switch (GlobalState)
 	{
 	case STATE_ILLEGAL_VDD:
@@ -2001,6 +2446,10 @@ uEASECommand const CmdList[] = {
 	{0x0504, Cmd0504_GetMemFillState},
 	{0x0506, Cmd0506_SyncMemFillState},
 	{0x0510, Cmd0510_MemoryRead},
+	{0x0530, Cmd0530_SetPC},
+	{0x0532, Cmd0532_GetPC},
+	{0x0540, Cmd0540_SetCPURegister},
+	{0x0542, Cmd0542_GetCPURegister},
 	{0x0700, Cmd0700_ResetAndBreak},
 	{0x1210, Cmd1210_InitializeFlash},
 	{0x1212, Cmd1212_FlashBlockErase},
@@ -2008,8 +2457,10 @@ uEASECommand const CmdList[] = {
 	{0x1232, Cmd1232_SyncLockState},
 	{0x0320, Cmd0320_GetNMICESource},
 	{0x0A00, Cmd0A00_GetInfo},
+	{0x0A01, Cmd0A01_SetDataModel},
+	{0x0A03, Cmd0A03_ParseOldTargetID},
 	{0x0A04, Cmd0A04_SetTargetInfo},
-	{0x0A05, Cmd0A05_ParseTargetID},
+	{0x0A05, Cmd0A05_ParseNewTargetID},
 	{0x0706, Cmd0706_ResetConnection},
 	{0x00FD, Cmd00FD_InitConnection},
 	{0x0708, Cmd0708_UninitConnection},
