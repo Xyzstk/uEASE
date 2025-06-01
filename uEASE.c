@@ -133,6 +133,7 @@ typedef enum {
 	RET_PARAM_TOO_LARGE			= 0x6003,
 	RET_FLASH_VERIFY_FAILURE	= 0x6100,
 	RET_BUSY					= 0x6200,
+	RET_NOT_BUSY				= 0x6201,
 	RET_TIMEOUT					= 0x6300,
 	RET_RESET_FAILURE			= 0x6302,
 	RET_FLASH_TIMEOUT			= 0x6303,
@@ -258,9 +259,9 @@ unsigned short OCD_ID;
 unsigned short PasswordInputCnt;
 unsigned short NMICEFlag;
 unsigned short NMICEControl;
-unsigned short EmulationTime;
 unsigned short MemFillRetcode;
 unsigned int MemFillEndAddr;
+unsigned int EmulationTime;
 bool OCDStateSyncFlag;
 bool TargetRunningFlag;
 bool TargetResetFlag;
@@ -1076,6 +1077,21 @@ RETCODE TargetRaiseNMICE() {
 	return retcode;
 }
 
+RETCODE TargetResumeEmulation() {
+	SAFE_EXEC_INSTRUCTION(0xF00C, FCON_addr);
+	SAFE_EXEC_INSTRUCTION(FCON_backup, 0xFE8F);
+	SAFE_EXEC_INSTRUCTION(0xE300, 0x9031);
+	if (DataModel == DATA_MODEL_FAR) {
+		SAFE_EXEC_INSTRUCTION(0xF00C, 0xF000);
+		SAFE_EXEC_INSTRUCTION(DSR_backup, 0x9031);
+	}
+	SAFE_EXEC_INSTRUCTION(0xF00C, EA_backup);
+	SAFE_EXEC_INSTRUCTION(PSW_backup, 0xA00C);
+	SAFE_EXEC_INSTRUCTION(ER0_backup & 0xFF, 0x0100 | (ER0_backup >> 8));
+	SAFE_EXEC_INSTRUCTION(0xFE7F, 0xFE8F);
+	return RET_SUCC;
+}
+
 RETCODE TargetResetAndBreak() {
 	RETCODE retcode = TargetRaiseNMICE();
 	if (retcode != RET_SUCC) return retcode;
@@ -1112,6 +1128,18 @@ RETCODE TargetResetAndBreak() {
 	return retcode;
 }
 
+unsigned short TargetGetNMICESource() {
+	unsigned short NMICESource = 0;
+	if (NMICEFlag) {
+		unsigned int ELR3 = ((TargetRegisterRead(0xB) & 0xF000) << 4) | TargetRegisterRead(0xA);
+		unsigned int BP1_addr = ((TargetRegisterRead(0x11) & 0x00F0) << 12) | TargetRegisterRead(0x12);
+		if (NMICEFlag & 2) NMICESource |= (NMICEControl & 0x20) && ELR3 == BP1_addr ? 2 : 4;
+		if (NMICEFlag & 0xC) NMICESource |= (NMICEControl & 4) ? 0x40 : 0x80;
+		if (NMICEFlag & 0x10) NMICESource |= 8;
+	}
+	return NMICESource;
+}
+
 void TargetFixConnection() {
 	TargetRegisterWrite(0, 0);
 	TargetRegisterWrite(0, 0);
@@ -1123,6 +1151,141 @@ void TargetFixConnection() {
 void TargetInputPassword(int size) {
 	for (int i = size - 1; i >= 0; i--)
 		TargetRegisterWrite(PasswordRegList[i], PasswordBuf[i]);
+}
+
+RETCODE Cmd0100_StartEmulation(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) break;
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+	unsigned int PCBPAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 2);
+	unsigned int RAMBPAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 8);
+	unsigned int RAMBPAddrMask = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 12);
+	unsigned short RAMBPCmpData = (ReceivePacket.payload[28] << 8) | ReceivePacket.payload[16];
+	unsigned short RAMBPCmpDataMask = (ReceivePacket.payload[29] << 8) | ReceivePacket.payload[17];
+	if (PCBPAddr > 0xFFFFF || RAMBPAddr > 0xFFFFFF || RAMBPAddrMask > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
+	unsigned short NMICEControlSetup = TargetRegisterRead(0xD) & 0xFFCF;
+	if (ReceivePacket.payload[59] & 1) {
+		NMICEControlSetup |= 0x20;
+		TargetRegisterWrite(0x12, PCBPAddr);
+		TargetRegisterWrite(0x11, (TargetRegisterRead(0x11) & 0xFF0F) | ((PCBPAddr >> 12) & 0x00F0));
+		TargetRegisterWrite(0x15, BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 6) - 1);
+	}
+	if (ReceivePacket.payload[59] & 2) {
+		NMICEControlSetup |= 0x10;
+		TargetRegisterWrite(0x18, RAMBPAddr);
+		TargetRegisterWrite(0x19, ((RAMBPAddr >> 16) & 0xFF) | ((RAMBPAddrMask >> 8) & 0xFF00));
+		TargetRegisterWrite(0x1A, RAMBPAddrMask);
+		TargetRegisterWrite(0x1B, RAMBPCmpData);
+		TargetRegisterWrite(0x1C, RAMBPCmpDataMask);
+		unsigned short RAMBPControl = (ReceivePacket.payload[58] == 6 ? 0x10 : 0) |
+			(RAMBPCmpDataMask ? 8 : 0) |
+			(ReceivePacket.payload[18] ? 4 : 0) |
+			((ReceivePacket.payload[19] + 1) & 3);
+		TargetRegisterWrite(0x1D, RAMBPControl);
+		TargetRegisterWrite(0x1E, BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 56) - 1);
+	}
+	TargetRegisterWrite(0xD, NMICEControlSetup);
+	TargetRegisterWrite(0xE, 0);
+	isTargetAvailable = false;
+	EmulationTime = 1;
+	SetGlobalState(STATE_BUSY);
+	// TODO: Turn on BUSY indicator
+	if (TargetResumeEmulation() != RET_SUCC) {
+		isTargetAvailable = true;
+		SetGlobalState(STATE_DEVICE_IDLE);
+		return RET_TIMEOUT;
+	}
+	BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+	RspPayloadSize = 2;
+	return RET_SUCC;
+}
+
+RETCODE Cmd0120_StepInto(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			TargetRegisterWrite(0xD, 4);
+			TargetRegisterWrite(0xE, 0);
+			isTargetAvailable = false;
+			SetGlobalState(STATE_BUSY);
+			// TODO: Turn on BUSY indicator
+			if (TargetResumeEmulation() != RET_SUCC) {
+				isTargetAvailable = true;
+				SetGlobalState(STATE_DEVICE_IDLE);
+				return RET_TIMEOUT;
+			}
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+			RspPayloadSize = 2;
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0122_StepOver(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			if (!(TargetInfoState & 1)) return RET_TARGET_INFO_ERROR;
+			unsigned short pc = TargetRegisterRead(0xA);
+			unsigned char csr = TargetRegisterRead(0xB) >> 12;
+			TargetRegisterWrite(0x60, 1);
+			TargetRegisterWrite(0x63, csr);
+			TargetRegisterWrite(0x64, pc);
+			TargetRegisterWrite(0x61, 1);
+			unsigned short insn = TargetRegisterRead(0x66);
+			if ((insn & 0xF00F) == 0xF001) {
+				TargetRegisterWrite(0x10, pc + 4);
+				TargetRegisterWrite(0x11, (TargetRegisterRead(0x11) & 0xFFF0) | csr);
+				TargetRegisterWrite(0xD, 2);
+			} else if ((insn & 0xF00F) == 0xF003 || (insn & 0xFFC0) == 0xE500) {
+				TargetRegisterWrite(0x10, pc + 2);
+				TargetRegisterWrite(0x11, (TargetRegisterRead(0x11) & 0xFFF0) | csr);
+				TargetRegisterWrite(0xD, 2);
+			} else {
+				TargetRegisterWrite(0xD, 4);
+			}
+			TargetRegisterWrite(0xE, 0);
+			isTargetAvailable = false;
+			SetGlobalState(STATE_BUSY);
+			// TODO: Turn on BUSY indicator
+			if (TargetResumeEmulation() != RET_SUCC) {
+				isTargetAvailable = true;
+				SetGlobalState(STATE_DEVICE_IDLE);
+				return RET_TIMEOUT;
+			}
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+			RspPayloadSize = 2;
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
 }
 
 RETCODE Cmd0500_MemoryWrite(void) {
@@ -1900,6 +2063,117 @@ RETCODE Cmd1232_SyncLockState(void) {
 	}
 }
 
+RETCODE Cmd0140_RaiseNMICE(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		return RET_NOT_BUSY;
+	case STATE_BUSY:
+		TargetRegisterWrite(0xD, TargetRegisterRead(0xD) | 8);
+		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+		RspPayloadSize = 2;
+		return RET_SUCC;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0150_SyncTargetState(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		TargetResetFlag = false;
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+	case STATE_BUSY:
+		TargetResetFlag = false;
+		if (!isTargetAvailable) {
+			NMICEFlag = TargetRegisterRead(0xE) & 0x1E;
+			NMICEControl = TargetRegisterRead(0xD) & 0xFE;
+			if (!(TargetRegisterRead(0) & 0x20)) {
+				SetGlobalState(STATE_TARGET_IDLE);
+				isTargetAvailable = true;
+				unsigned short pc = TargetRegisterRead(0xA);
+				unsigned char csr = TargetRegisterRead(0xB) >> 12;
+				TargetRegisterWrite(0x60, 1);
+				TargetRegisterWrite(0x63, csr);
+				TargetRegisterWrite(0x64, pc);
+				TargetRegisterWrite(0x61, 1);
+				if (TargetRegisterRead(0x66) == 0xFEFF) NMICEFlag |= 2;
+				TargetRegisterWrite(0xD, 0);
+				if (TargetBackupCPURegisters()) return RET_TIMEOUT;
+			}
+		}
+		// TODO: Turn off BUSY indicator if isTargetAvailable
+		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+		RspPayload[2] = isTargetAvailable;
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 3, 0);
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 7, 0);
+		unsigned short NMICESource = TargetGetNMICESource();
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 11, NMICESource);
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 15, EmulationTime);
+		if (NMICEControl & 0x20) {
+			unsigned short PCBPRemainingCnt = TargetRegisterRead(0x15) - TargetRegisterRead(0x16) + 1;
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 19, PCBPRemainingCnt);
+		} else {
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 19, 0);
+		}
+		if (NMICEFlag & 0x10) {
+			unsigned short RAMBPRemainingCnt = TargetRegisterRead(0x1E) - TargetRegisterRead(0x1F) + 1;
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 21, RAMBPRemainingCnt);
+		} else {
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 21, 0);
+		}
+		RspPayloadSize = 23;
+		return RET_SUCC;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0152_SyncEmulationState(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+	case STATE_BUSY:
+		if (isTargetAvailable) {
+			// TODO: Turn off BUSY indicator
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_TARGET_NOT_CONNECTED);
+		} else {
+			NMICEFlag = TargetRegisterRead(0xE) & 0x1E;
+			NMICEControl = TargetRegisterRead(0xD) & 0xFE;
+			if (!(TargetRegisterRead(0) & 0x20)) {
+				SetGlobalState(STATE_TARGET_IDLE);
+				isTargetAvailable = true;
+				TargetRegisterWrite(0xD, 0);
+				if (TargetBackupCPURegisters()) return RET_TIMEOUT;
+				// TODO: Turn off BUSY indicator
+			}
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+		}
+		RspPayload[2] = isTargetAvailable;
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 3, 0);
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 7, 0);
+		unsigned short NMICESource = TargetGetNMICESource();
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 11, NMICESource);
+		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 15, 0);
+		RspPayloadSize = 19;
+		return RET_SUCC;
+	default:
+		return RET_ERROR;
+	}
+}
+
 RETCODE Cmd0320_GetNMICESource(void) {
 	switch (GlobalState)
 	{
@@ -1909,14 +2183,7 @@ RETCODE Cmd0320_GetNMICESource(void) {
 		return RET_TARGET_NOT_CONNECTED;
 	case STATE_TARGET_IDLE:
 	case STATE_BUSY:
-		unsigned short NMICESource = 0;
-		if (NMICEFlag) {
-			unsigned int ELR3 = ((TargetRegisterRead(0xB) & 0xF000) << 4) | TargetRegisterRead(0xA);
-			unsigned int BP1_addr = ((TargetRegisterRead(0x11) & 0x00F0) << 12) | TargetRegisterRead(0x12);
-			if (NMICEFlag & 2) NMICESource |= (NMICEControl & 0x20) && ELR3 == BP1_addr ? 2 : 4;
-			if (NMICEFlag & 0xC) NMICESource |= (NMICEControl & 4) ? 0x40 : 0x80;
-			if (NMICEFlag & 0x10) NMICESource |= 8;
-		}
+		unsigned short NMICESource = TargetGetNMICESource();
 		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
 		BYTEARRAY_WORD_WRITE_BE(RspPayload, 2, 0xFEFF);
 		BYTEARRAY_WORD_WRITE_BE(RspPayload, 4, NMICESource);
@@ -2328,7 +2595,7 @@ RETCODE Cmd0706_ResetConnection(void) {
 		delayTicks(0x1500);
 		TargetRegisterWrite(0, 0);
 		if (TargetRegisterRead(0x48)) retcode = TargetRaiseNMICE();
-		else TargetResetAndBreak();
+		else retcode = TargetResetAndBreak();
 		if (retcode != RET_SUCC) {
 			SetGlobalState(STATE_CONNECTION_ERROR);
 			return retcode == RET_RESET_FAILURE ? retcode : RET_TIMEOUT;
@@ -2441,6 +2708,9 @@ RETCODE CmdFFFF_InvalidCommand(void) {
 }
 
 uEASECommand const CmdList[] = {
+	{0x0100, Cmd0100_StartEmulation},
+	{0x0120, Cmd0120_StepInto},
+	{0x0122, Cmd0122_StepOver},
 	{0x0500, Cmd0500_MemoryWrite},
 	{0x0502, Cmd0502_MemoryFill},
 	{0x0504, Cmd0504_GetMemFillState},
@@ -2455,6 +2725,9 @@ uEASECommand const CmdList[] = {
 	{0x1212, Cmd1212_FlashBlockErase},
 	{0x1230, Cmd1230_InputPassword},
 	{0x1232, Cmd1232_SyncLockState},
+	{0x0140, Cmd0140_RaiseNMICE},
+	{0x0150, Cmd0150_SyncTargetState},
+	{0x0152, Cmd0152_SyncEmulationState},
 	{0x0320, Cmd0320_GetNMICESource},
 	{0x0A00, Cmd0A00_GetInfo},
 	{0x0A01, Cmd0A01_SetDataModel},
