@@ -131,6 +131,7 @@ typedef enum {
 	RET_ADDR_OUT_OF_RANGE		= 0x6001,
 	RET_INVALID_RES_NUMBER		= 0x6002,
 	RET_PARAM_TOO_LARGE			= 0x6003,
+	RET_TOO_MANY_HW_BREAKPOINTS	= 0x6011,
 	RET_FLASH_VERIFY_FAILURE	= 0x6100,
 	RET_BUSY					= 0x6200,
 	RET_NOT_BUSY				= 0x6201,
@@ -1276,6 +1277,104 @@ RETCODE Cmd0122_StepOver(void) {
 				isTargetAvailable = true;
 				SetGlobalState(STATE_DEVICE_IDLE);
 				return RET_TIMEOUT;
+			}
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+			RspPayloadSize = 2;
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0300_SetPCBreakpoint(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			if (!(TargetInfoState & 2)) return RET_TARGET_INFO_ERROR;
+			unsigned short BreakpointNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 2);
+			if (BreakpointNum > targetInfo.BreakpointNum) {
+				BreakpointNum = targetInfo.BreakpointNum;
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_TOO_MANY_HW_BREAKPOINTS);
+			} else {
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
+			}
+			BYTEARRAY_WORD_WRITE_BE(RspPayload, 2, BreakpointNum);
+			RspPayloadSize = 4;
+			unsigned short NMICEControlSetup = TargetRegisterRead(0xD) & 0x3C;
+			unsigned short BreakpointCSR = 0;
+			unsigned int BreakpointAddr;
+			switch (BreakpointNum)
+			{
+			default:
+				BreakpointAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 12);
+				if (BreakpointAddr > 0xFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				TargetRegisterWrite(0x14, BreakpointAddr);
+				BreakpointCSR |= (BreakpointAddr >> 4) & 0xF000;
+				NMICEControlSetup |= 0x80;
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 8, 0xFEFF);
+				RspPayloadSize += 2;
+			case 2:
+				BreakpointAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 8);
+				if (BreakpointAddr > 0xFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				TargetRegisterWrite(0x13, BreakpointAddr);
+				BreakpointCSR |= (BreakpointAddr >> 8) & 0x0F00;
+				NMICEControlSetup |= 0x40;
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 6, 0xFEFF);
+				RspPayloadSize += 2;
+			case 1:
+			case 0:
+				BreakpointAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 4);
+				if (BreakpointAddr > 0xFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				TargetRegisterWrite(0x10, BreakpointAddr);
+				BreakpointCSR |= (BreakpointAddr >> 16) & 0xF;
+				NMICEControlSetup |= 2;
+				BYTEARRAY_WORD_WRITE_BE(RspPayload, 4, 0xFEFF);
+				RspPayloadSize += 2;
+			}
+			TargetRegisterWrite(0x11, BreakpointCSR);
+			TargetRegisterWrite(0xD, NMICEControlSetup);
+			return RET_SUCC;
+		}
+	case STATE_BUSY:
+		return RET_BUSY;
+	default:
+		return RET_ERROR;
+	}
+}
+
+RETCODE Cmd0302_ClearPCBreakpoint(void) {
+	switch (GlobalState)
+	{
+	case STATE_ILLEGAL_VDD:
+		return RET_ILLEGAL_VDD;
+	case STATE_DEVICE_IDLE:
+		return RET_TARGET_NOT_CONNECTED;
+	case STATE_TARGET_IDLE:
+		if (isTargetAvailable) {
+			unsigned short requestNum = BYTEARRAY_WORD_READ_BE(ReceivePacket.payload, 2);
+			unsigned short BreakpointCSR = TargetRegisterRead(0x11);
+			unsigned int BPAddr0 = TargetRegisterRead(0x10) | ((BreakpointCSR & 0xF) << 16);
+			unsigned int BPAddr1 = TargetRegisterRead(0x13) | ((BreakpointCSR & 0x0F00) << 8);
+			unsigned int BPAddr2 = TargetRegisterRead(0x14) | ((BreakpointCSR & 0xF000) << 4);
+			for (unsigned short i = 0; i < requestNum; i++) {
+				if (i >= 3) return RET_TOO_MANY_HW_BREAKPOINTS;
+				unsigned int BreakpointAddr = BYTEARRAY_DWORD_READ_BE(ReceivePacket.payload, 6 * i + 4);
+				if (BreakpointAddr > 0xFFFFF) return RET_ADDR_OUT_OF_RANGE;
+				BreakpointAddr &= 0xFFFFE;
+				if (BreakpointAddr == BPAddr0)
+					TargetRegisterWrite(0xD, TargetRegisterRead(0xD) & 0xFD);
+				else if (BreakpointAddr == BPAddr1)
+					TargetRegisterWrite(0xD, TargetRegisterRead(0xD) & 0xBF);
+				else if (BreakpointAddr == BPAddr2)
+					TargetRegisterWrite(0xD, TargetRegisterRead(0xD) & 0x7F);
 			}
 			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
 			RspPayloadSize = 2;
@@ -2711,6 +2810,8 @@ uEASECommand const CmdList[] = {
 	{0x0100, Cmd0100_StartEmulation},
 	{0x0120, Cmd0120_StepInto},
 	{0x0122, Cmd0122_StepOver},
+	{0x0300, Cmd0300_SetPCBreakpoint},
+	{0x0302, Cmd0302_ClearPCBreakpoint},
 	{0x0500, Cmd0500_MemoryWrite},
 	{0x0502, Cmd0502_MemoryFill},
 	{0x0504, Cmd0504_GetMemFillState},
