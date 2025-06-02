@@ -1,5 +1,6 @@
 #include "pico/multicore.h"
 #include "tusb.h"
+#include "device/dcd.h"
 #include "device/usbd.h"
 
 typedef struct {
@@ -21,6 +22,7 @@ extern uEASEPacket ReceivePacket;
 extern uEASEPacket TransmitPacket;
 
 extern bool TransmitSyncFlag;
+extern bool BusResetFlag;
 
 void usb_loop(void);
 

@@ -2908,6 +2908,13 @@ int main()
 	TargetInfoState = 0;
 
 	while (true) {
+		if (BusResetFlag) {
+			SetGlobalState(STATE_DEVICE_IDLE);
+			PasswordInputCnt = 0;
+			memset(&targetInfo, 0, sizeof(TargetInfo));
+			ConnectionState = TRG_NOT_CONNECTED;
+			BusResetFlag = false;
+		}
 		if (OCDStateSyncFlag && ConnectionState == TRG_CONNECTED) {
 			systick_hw->csr &= ~1;
 			OCDStateSyncFlag = false;

@@ -42,6 +42,7 @@
         "multicore.h": "c",
         "spi.h": "c",
         "hardware.h": "c",
-        "ssio.h": "c"
+        "ssio.h": "c",
+        "usb.h": "c"
     }
 }

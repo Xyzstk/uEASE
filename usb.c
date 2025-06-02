@@ -11,6 +11,7 @@ uEASEPacket ReceivePacket;
 uEASEPacket TransmitPacket;
 
 bool TransmitSyncFlag;
+bool BusResetFlag;
 
 tusb_rhport_init_t const usb_init_config = {
 	.role = TUSB_ROLE_DEVICE,
@@ -76,6 +77,13 @@ void tud_vendor_tx_cb(uint8_t itf, uint32_t sent_bytes) {
 	inEndpoint.BufCurrentPtr += bufsize;
 }
 
+void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr) {
+	if (eventid != DCD_EVENT_BUS_RESET) return;
+	BusResetFlag = true;
+	memset(&ReceivePacket, 0, sizeof(uEASEPacket));
+	BulkReceivedBytes = 0;
+}
+
 void VarInit(void) {
 	VendorControlReqFlag = false;
 	BulkTransferSize = CFG_TUD_VENDOR_EPSIZE;
@@ -84,6 +92,8 @@ void VarInit(void) {
 	BulkXferSetup(&TransmitPacket, &inEndpoint, 0);
 	memset(&ReceivePacket, 0, sizeof(uEASEPacket));
 	memset(&TransmitPacket, 0, sizeof(uEASEPacket));
+	TransmitSyncFlag = false;
+	BusResetFlag = false;
 }
 
 void usb_loop(void) {
