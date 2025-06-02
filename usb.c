@@ -10,6 +10,8 @@ BulkXferEndpoint inEndpoint;
 uEASEPacket ReceivePacket;
 uEASEPacket TransmitPacket;
 
+bool TransmitSyncFlag;
+
 tusb_rhport_init_t const usb_init_config = {
 	.role = TUSB_ROLE_DEVICE,
 	.speed = TUSB_SPEED_FULL
@@ -64,7 +66,10 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize) {
 
 void tud_vendor_tx_cb(uint8_t itf, uint32_t sent_bytes) {
 	unsigned int bufsize = inEndpoint.BufAllocEnd - inEndpoint.BufCurrentPtr;
-	if (!bufsize) return;
+	if (!bufsize) {
+		TransmitSyncFlag = true;
+		return;
+	}
 	if (bufsize > CFG_TUD_VENDOR_EPSIZE) bufsize = CFG_TUD_VENDOR_EPSIZE;
 	tud_vendor_n_write(itf, inEndpoint.buffer + inEndpoint.BufCurrentPtr, bufsize);
 	tud_vendor_n_write_flush(itf);

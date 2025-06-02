@@ -315,6 +315,25 @@ void SetGlobalState(GLOBAL_STATE state) {
 	else systick_hw->csr &= ~1;
 }
 
+unsigned int RspPacketInit(unsigned int size) {
+	TransmitPacket.magic = 0x4D504843;
+	TransmitPacket.idWrapper_L = 1;
+	TransmitPacket.id = PendingPacketID;
+	TransmitPacket.idWrapper_H = 1ull << 40;
+	TransmitPacket.payloadSize = size;
+	memcpy(TransmitPacket.payload, RspPayload, size);
+	return size + 0x10;
+}
+
+void SendRspPacket(RETCODE retcode) {
+	if (retcode != RET_SUCC) {
+		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, retcode);
+		SendPacket(RspPacketInit(2));
+		return;
+	}
+	SendPacket(RspPacketInit(RspPayloadSize));
+}
+
 RETCODE TargetFlashWrite(void* buffer, unsigned int startAddr, unsigned int endAddr, int alignMode, unsigned short* writeCount) {
 	unsigned short seg = (startAddr >> 16) & 0xFF;
 	unsigned short offset = startAddr & 0xFFFE;
@@ -324,9 +343,8 @@ RETCODE TargetFlashWrite(void* buffer, unsigned int startAddr, unsigned int endA
 	if (flashCharacteristics != 0) {
 		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) | 1);
 		busy_wait_ms(2);
-		if (!(flashCharacteristics & 2)) {
-			// TODO: Enable VPP
-		}
+		if (!(flashCharacteristics & 2))
+			EnableVPP();
 	}
 #if FLASH_ENABLE_TEST_AREA_WRITE
 	TargetRegisterWrite(0x68, TargetRegisterRead(0x68) | 2);
@@ -409,9 +427,8 @@ RETCODE TargetFlashWrite(void* buffer, unsigned int startAddr, unsigned int endA
 	TargetRegisterWrite(0x68, TargetRegisterRead(0x68) & ~2);
 #endif
 	if (flashCharacteristics != 0) {
-		if (!(flashCharacteristics & 2)) {
-			//TODO: Disable VPP
-		}
+		if (!(flashCharacteristics & 2))
+			DisableVPP();
 		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 	}
 #if FLASH_ENABLE_WRITE_VERIFY
@@ -467,9 +484,8 @@ RETCODE TargetFlashChipErase(void) {
 	if (flashCharacteristics != 0) {
 		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) | 1);
 		busy_wait_ms(2);
-		if (!(flashCharacteristics & 2)) {
-			// TODO: Enable VPP
-		}
+		if (!(flashCharacteristics & 2))
+			EnableVPP();
 	}
 #if FLASH_ENABLE_TEST_AREA_WRITE
 	TargetRegisterWrite(0x68, TargetRegisterRead(0x68) | 2);
@@ -489,9 +505,8 @@ RETCODE TargetFlashChipErase(void) {
 	TargetRegisterWrite(0x68, TargetRegisterRead(0x68) & ~2);
 #endif
 	if (flashCharacteristics != 0) {
-		if (!(flashCharacteristics & 2)) {
-			//TODO: Disable VPP
-		}
+		if (!(flashCharacteristics & 2))
+			DisableVPP();
 		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 	}
 	return RET_SUCC;
@@ -502,9 +517,8 @@ RETCODE TargetFlashBlockErase(unsigned int addr) {
 	if (flashCharacteristics != 0) {
 		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) | 1);
 		busy_wait_ms(2);
-		if (!(flashCharacteristics & 2)) {
-			// TODO: Enable VPP
-		}
+		if (!(flashCharacteristics & 2))
+			EnableVPP();
 	}
 #if FLASH_ENABLE_TEST_AREA_WRITE
 	TargetRegisterWrite(0x68, TargetRegisterRead(0x68) | 2);
@@ -524,9 +538,8 @@ RETCODE TargetFlashBlockErase(unsigned int addr) {
 	TargetRegisterWrite(0x68, TargetRegisterRead(0x68) & ~2);
 #endif
 	if (flashCharacteristics != 0) {
-		if (!(flashCharacteristics & 2)) {
-			//TODO: Disable VPP
-		}
+		if (!(flashCharacteristics & 2))
+			DisableVPP();
 		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 	}
 	return RET_SUCC;
@@ -625,7 +638,7 @@ RETCODE TargetFlashFill(
 	RETCODE retcode = TargetFlashBlockErase(blockStartAddr);
 	if (retcode != RET_SUCC) goto abort;
 	unsigned short writeCount = 0;
-	// TODO: Turn on BUSY indicator
+	TurnOnBusyIndicator();
 	if (bufStartAddr > 0) {
 		retcode = TargetFlashWrite(FlashFillBuf, blockStartAddr, fillStartAddr - 1, alignMode, &writeCount);
 		if (retcode != RET_SUCC) goto abort;
@@ -648,12 +661,15 @@ RETCODE TargetFlashFill(
 	retcode = TargetFlashWrite(FlashFillBuf, startAddr, endAddr, alignMode, &writeCount);
 	if (retcode != RET_SUCC) {
 		abort:
-		// TODO: Disable VPP
+		DisableVPP();
 		TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 		TargetRegisterWrite(0x60, 0);
 		TargetRegisterWrite(0x61, 0);
+		systick_hw->rvr = 0x4E;
+		systick_hw->cvr = 0;
+		systick_hw->csr = 2;
 	}
-	// TODO: Turn off BUSY indicator
+	TurnOffBusyIndicator();
 	return retcode;
 }
 
@@ -1200,7 +1216,7 @@ RETCODE Cmd0100_StartEmulation(void) {
 	isTargetAvailable = false;
 	EmulationTime = 1;
 	SetGlobalState(STATE_BUSY);
-	// TODO: Turn on BUSY indicator
+	TurnOnBusyIndicator();
 	if (TargetResumeEmulation() != RET_SUCC) {
 		isTargetAvailable = true;
 		SetGlobalState(STATE_DEVICE_IDLE);
@@ -1224,7 +1240,7 @@ RETCODE Cmd0120_StepInto(void) {
 			TargetRegisterWrite(0xE, 0);
 			isTargetAvailable = false;
 			SetGlobalState(STATE_BUSY);
-			// TODO: Turn on BUSY indicator
+			TurnOnBusyIndicator();
 			if (TargetResumeEmulation() != RET_SUCC) {
 				isTargetAvailable = true;
 				SetGlobalState(STATE_DEVICE_IDLE);
@@ -1272,7 +1288,7 @@ RETCODE Cmd0122_StepOver(void) {
 			TargetRegisterWrite(0xE, 0);
 			isTargetAvailable = false;
 			SetGlobalState(STATE_BUSY);
-			// TODO: Turn on BUSY indicator
+			TurnOnBusyIndicator();
 			if (TargetResumeEmulation() != RET_SUCC) {
 				isTargetAvailable = true;
 				SetGlobalState(STATE_DEVICE_IDLE);
@@ -1424,15 +1440,18 @@ RETCODE Cmd0500_MemoryWrite(void) {
 				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
 				code_flash_write:
 				if (startAddr < 0x100000) {
-					// TODO: Turn on BUSY indicator
+					TurnOnBusyIndicator();
 					retcode = TargetFlashWrite(ReceivePacket.payload + 11, startAddr, endAddr, alignMode, &writeCount);
 					if (retcode != RET_SUCC) {
-						// TODO: Disable VPP
+						DisableVPP();
 						TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 						TargetRegisterWrite(0x60, 0);
 						TargetRegisterWrite(0x61, 0);
+						systick_hw->rvr = 0x4E;
+						systick_hw->cvr = 0;
+						systick_hw->csr = 2;
 					}
-					// TODO: Turn off BUSY indicator
+					TurnOffBusyIndicator();
 				} else {
 					retcode = TargetDataMemoryWrite(ReceivePacket.payload + 11, startAddr, endAddr, alignMode, &writeCount);
 				}
@@ -1443,13 +1462,13 @@ RETCODE Cmd0500_MemoryWrite(void) {
 			case RES_DATA_FLASH_FAR:
 				if (startAddr < 0x10000 || endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
 				data_flash_write:
-				// TODO: Turn on BUSY indicator
+				TurnOnBusyIndicator();
 				retcode = TargetDataFlashWrite(ReceivePacket.payload + 11, startAddr, endAddr, alignMode, &writeCount);
 				if (retcode != RET_SUCC) {
 					TargetRegisterWrite(0x60, 0);
 					TargetRegisterWrite(0x61, 0);
 				}
-				// TODO: Turn off BUSY indicator
+				TurnOffBusyIndicator();
 				break;
 			case RES_DATA_MEMORY:
 				if (endAddr > 0xFFFFFF) return RET_ADDR_OUT_OF_RANGE;
@@ -1604,17 +1623,17 @@ RETCODE Cmd0502_MemoryFill(void) {
 				blockStartAddr = startAddr;
 				do {
 					blockEndAddr = endAddr > blockStartAddr + 0xFF ? blockStartAddr + 0xFF : endAddr;
-					// TODO: Turn on BUSY indicator
+					TurnOnBusyIndicator();
 					retcode = TargetDataFlashFill(blockStartAddr, blockEndAddr, alignMode, FillWord, FillByte);
 					if (retcode != RET_SUCC) {
 						TargetRegisterWrite(0x60, 0);
 						TargetRegisterWrite(0x61, 0);
-						// TODO: Turn off BUSY indicator
+						TurnOffBusyIndicator();
 						MemFillEndAddr = alignMode == 1 ? -2 : -1;
 						MemFillRetcode = retcode;
 						return RET_SUCC;
 					}
-					// TODO: Turn off BUSY indicator
+					TurnOffBusyIndicator();
 					blockStartAddr = blockEndAddr + 1;
 				} while (blockEndAddr < endAddr);
 				MemFillEndAddr = blockEndAddr;
@@ -2003,7 +2022,7 @@ RETCODE Cmd0700_ResetAndBreak(void) {
 			RETCODE retcode = RET_SUCC;
 			if (retcode = TargetResetAndBreak()) return retcode;
 			if (retcode = TargetBackupCPURegisters()) return retcode;
-			// TODO: Turn off BUSY indicator
+			TurnOffBusyIndicator();
 			NMICEFlag = 0;
 			EmulationTime = 0;
 			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
@@ -2029,7 +2048,7 @@ RETCODE Cmd1210_InitializeFlash(void) {
 		if (!(TargetRegisterRead(0x48) && targetInfo.LockedFlashInitDisabled)) {
 			RETCODE retcode = TargetFlashChipErase();
 			if (retcode != RET_SUCC) {
-				// TODO: Disable VPP
+				DisableVPP();
 				TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 				TargetRegisterWrite(0x60, 0);
 				TargetRegisterWrite(0x61, 0);
@@ -2046,10 +2065,13 @@ RETCODE Cmd1210_InitializeFlash(void) {
 					2,
 					&writeCount);
 				if (retcode != RET_SUCC) {
-					// TODO: Disable VPP
+					DisableVPP();
 					TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 					TargetRegisterWrite(0x60, 0);
 					TargetRegisterWrite(0x61, 0);
+					systick_hw->rvr = 0x4E;
+					systick_hw->cvr = 0;
+					systick_hw->csr = 2;
 					return retcode;
 				}
 			}
@@ -2084,7 +2106,7 @@ RETCODE Cmd1212_FlashBlockErase(void) {
 		addr = targetInfo.CodeBlocks[blockIdx].BlockStartAddr;
 		RETCODE retcode = TargetFlashBlockErase(addr);
 		if (retcode != RET_SUCC) {
-			// TODO: Disable VPP
+			DisableVPP();
 			TargetRegisterWrite(0x67, TargetRegisterRead(0x67) & ~1);
 			TargetRegisterWrite(0x60, 0);
 			TargetRegisterWrite(0x61, 0);
@@ -2209,7 +2231,7 @@ RETCODE Cmd0150_SyncTargetState(void) {
 				if (TargetBackupCPURegisters()) return RET_TIMEOUT;
 			}
 		}
-		// TODO: Turn off BUSY indicator if isTargetAvailable
+		if (isTargetAvailable) TurnOffBusyIndicator();
 		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
 		RspPayload[2] = isTargetAvailable;
 		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 3, 0);
@@ -2246,7 +2268,7 @@ RETCODE Cmd0152_SyncEmulationState(void) {
 	case STATE_TARGET_IDLE:
 	case STATE_BUSY:
 		if (isTargetAvailable) {
-			// TODO: Turn off BUSY indicator
+			TurnOffBusyIndicator();
 			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_TARGET_NOT_CONNECTED);
 		} else {
 			NMICEFlag = TargetRegisterRead(0xE) & 0x1E;
@@ -2256,7 +2278,7 @@ RETCODE Cmd0152_SyncEmulationState(void) {
 				isTargetAvailable = true;
 				TargetRegisterWrite(0xD, 0);
 				if (TargetBackupCPURegisters()) return RET_TIMEOUT;
-				// TODO: Turn off BUSY indicator
+				TurnOffBusyIndicator();
 			}
 			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
 		}
@@ -2705,11 +2727,12 @@ RETCODE Cmd0706_ResetConnection(void) {
 		RspPayloadSize = 3;
 		return retcode;
 	case 2:
-		// TODO: Reset device
 		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_TARGET_NOT_CONNECTED);
 		RspPayload[2] = 0;
 		RspPayloadSize = 3;
-		return RET_SUCC;
+		SendRspPacket(RET_SUCC);
+		while (!TransmitSyncFlag);
+		reboot();
 	default:
 		return RET_PARAM_TOO_LARGE;
 	}
@@ -2848,25 +2871,6 @@ bool CheckPacketValidity() {
 		return true;
 	}
 	return false;
-}
-
-unsigned int RspPacketInit(unsigned int size) {
-	TransmitPacket.magic = 0x4D504843;
-	TransmitPacket.idWrapper_L = 1;
-	TransmitPacket.id = PendingPacketID;
-	TransmitPacket.idWrapper_H = 1ull << 40;
-	TransmitPacket.payloadSize = size;
-	memcpy(TransmitPacket.payload, RspPayload, size);
-	return size + 0x10;
-}
-
-void SendRspPacket(RETCODE retcode) {
-	if (retcode != RET_SUCC) {
-		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, retcode);
-		SendPacket(RspPacketInit(2));
-		return;
-	}
-	SendPacket(RspPacketInit(RspPayloadSize));
 }
 
 RETCODE parseReceivePacket(void) {

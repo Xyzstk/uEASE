@@ -2,10 +2,15 @@
 #include "hardware/exception.h"
 #include "hardware/timer.h"
 #include "hardware/structs/systick.h"
+#include "hardware/watchdog.h"
 #include "ssio.h"
 
 #define PIN_SCL	0
 #define PIN_SDA	1
+
+#define PIN_VPP 2
+
+#define PIN_BUSY_INDICATOR PICO_DEFAULT_LED_PIN
 
 void systick_int_handler(void);
 
@@ -40,6 +45,12 @@ static inline void IOInit(void) {
 	hw_set_bits(&pio0->input_sync_bypass, 1u << PIN_SDA);
 	pio_sm_init(pio0, 0, offset + ssio_wrap_target, &c);
 	pio_sm_set_enabled(pio0, 0, true);
+
+	gpio_init(PIN_VPP);
+	gpio_set_dir(PIN_VPP, GPIO_OUT);
+
+	gpio_init(PIN_BUSY_INDICATOR);
+	gpio_set_dir(PIN_BUSY_INDICATOR, GPIO_OUT);
 }
 
 static inline void delayTicks(unsigned int tick) {
@@ -63,4 +74,26 @@ static inline void TargetRegisterWrite(unsigned char regIdx, unsigned short data
 static inline unsigned short TargetRegisterRead(unsigned char regIdx) {
 	pio_sm_put_blocking(pio0, 0, ((unsigned int)regIdx << 25) | 0x1000000u);
 	return pio_sm_get_blocking(pio0, 0);
+}
+
+static inline void EnableVPP(void) {
+	gpio_put(PIN_VPP, 1);
+}
+
+static inline void DisableVPP(void) {
+	gpio_put(PIN_VPP, 0);
+}
+
+static inline void TurnOnBusyIndicator(void) {
+	gpio_put(PIN_BUSY_INDICATOR, 1);
+}
+
+static inline void TurnOffBusyIndicator(void) {
+	gpio_put(PIN_BUSY_INDICATOR, 0);
+}
+
+static inline void reboot(void) {
+	watchdog_enable(100, 1);
+	watchdog_reboot(0, 0, 0);
+	while (true);
 }

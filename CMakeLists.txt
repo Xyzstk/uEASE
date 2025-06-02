@@ -65,6 +65,7 @@ target_link_libraries(uEASE
         hardware_exception
         hardware_pio
         hardware_timer
+        hardware_watchdog
         )
 
 pico_add_extra_outputs(uEASE)

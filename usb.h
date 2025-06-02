@@ -20,10 +20,13 @@ typedef struct __attribute__((__packed__)) {
 extern uEASEPacket ReceivePacket;
 extern uEASEPacket TransmitPacket;
 
+extern bool TransmitSyncFlag;
+
 void usb_loop(void);
 
 bool isPacketReceived(void);
 
 static inline void SendPacket(unsigned int size) {
+	TransmitSyncFlag = false;
 	multicore_fifo_push_blocking_inline(size);
 }
