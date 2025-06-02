@@ -2267,10 +2267,7 @@ RETCODE Cmd0152_SyncEmulationState(void) {
 		return RET_TARGET_NOT_CONNECTED;
 	case STATE_TARGET_IDLE:
 	case STATE_BUSY:
-		if (isTargetAvailable) {
-			TurnOffBusyIndicator();
-			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_TARGET_NOT_CONNECTED);
-		} else {
+		if (!isTargetAvailable) {
 			NMICEFlag = TargetRegisterRead(0xE) & 0x1E;
 			NMICEControl = TargetRegisterRead(0xD) & 0xFE;
 			if (!(TargetRegisterRead(0) & 0x20)) {
@@ -2278,10 +2275,10 @@ RETCODE Cmd0152_SyncEmulationState(void) {
 				isTargetAvailable = true;
 				TargetRegisterWrite(0xD, 0);
 				if (TargetBackupCPURegisters()) return RET_TIMEOUT;
-				TurnOffBusyIndicator();
 			}
-			BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
 		}
+		if (isTargetAvailable) TurnOffBusyIndicator();
+		BYTEARRAY_WORD_WRITE_BE(RspPayload, 0, RET_SUCC);
 		RspPayload[2] = isTargetAvailable;
 		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 3, 0);
 		BYTEARRAY_DWORD_WRITE_BE(RspPayload, 7, 0);
