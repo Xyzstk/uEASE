@@ -7,11 +7,11 @@
 ;config:
 ;autopull		off
 ;autopush		on
-;out_pins		SDA
-;in_pins		SDA
-;set_pins		SDA
-;jmp_pin		SDA
-;sideset_pins	SCL
+;out_pins		TEST
+;in_pins		TEST
+;set_pins		TEST
+;jmp_pin		TEST
+;sideset_pins	RESET_N
 ;osr_size		24
 ;isr_size		16
 
